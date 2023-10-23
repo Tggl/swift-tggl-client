@@ -19,15 +19,15 @@ public class TgglClient {
         self.flags = flags
     }
     
-    func isActive(slug: String) -> Bool {
+    public func isActive(slug: String) -> Bool {
         return self.flags.keys.contains(slug);
     }
     
-    func get(slug: String, defaultValue: Any? = nil) -> Any? {
+    public func get(slug: String, defaultValue: Any? = nil) -> Any? {
         return self.flags.keys.contains(slug) ? self.flags[slug] as Any? : defaultValue;
     }
     
-    func setContext(context: [String:Any?], completionHandler: ((Error?) -> Void)? = nil) -> Void {
+    public func setContext(context: [String:Any?], completionHandler: ((Error?) -> Void)? = nil) -> Void {
         let data = try! JSONSerialization.data(withJSONObject: context, options: [])
         let headers = [
             "Content-Type": "application/json",
