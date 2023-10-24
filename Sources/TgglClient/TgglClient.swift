@@ -13,7 +13,7 @@ public class TgglClient {
     var flags: [String:Any?];
     let context: [String:Any?] = [:];
     
-    init(apiKey: String, url: String = "https://api.tggl.io/flags", flags: [String : Any?] = [:]) {
+    public init(apiKey: String, url: String = "https://api.tggl.io/flags", flags: [String : Any?] = [:]) {
         self.apiKey = apiKey
         self.url = URL(string: url)!
         self.flags = flags
