@@ -3,10 +3,18 @@ import XCTest
 
 final class TgglClientTests: XCTestCase {
     func testExample() throws {
-        // XCTest Documentation
-        // https://developer.apple.com/documentation/xctest
-
-        // Defining Test Cases and Test Methods
-        // https://developer.apple.com/documentation/xctest/defining_test_cases_and_test_methods
+        
+        print("Test started")
+        let client = TgglClient(apiKey: "")
+        
+        XCTAssertEqual(client.flags.count, 0)
+        
+        client.startPolling(every: 3)
+        
+        print("Test ended")
+        
+        let expectation = XCTestExpectation(description: "Success")
+        
+        XCTWaiter.wait(for: [expectation], timeout: 20.0)
     }
 }
