@@ -22,6 +22,8 @@ extension TgglClient {
     }
     
     func fetch() {
+        print ("Fetch.")
+
         cancelCurrentRequest()
         
         let completion = { [weak self] in
@@ -39,27 +41,32 @@ extension TgglClient {
         }
         
         let task = Task {
-                do {                    
-                    let (data, response) = try await URLSession.shared.data(for: urlRequest())
-                    
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw NetworkError.invalidResponse
-                    }
-                    guard (200...299).contains(httpResponse.statusCode) else {
-                        throw NetworkError.invalidHttpCode(httpResponse.statusCode)
-                    }
-                          
-                    let json = try JSONDecoder().decode([[Tggl]].self, from: data)
-                    
-                    self.flags = json
-                    
-                    try await completion()
-
-                } catch {
-                    try await completion()
-                    print("\(Date.now): task did error \(error)")
+            do {
+                let (data, response) = try await URLSession.shared.data(for: urlRequest())
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw NetworkError.invalidResponse
                 }
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    throw NetworkError.invalidHttpCode(httpResponse.statusCode)
+                }
+                      
+                let json = try JSONDecoder().decode([[Tggl]].self, from: data)
+                self.flags = json
+                
+                print("--- flags ---")
+                flags.first?.forEach {
+                    print("\($0.key) - \($0.value)")
+                }
+                print("-------------")
+
+            } catch {
+                print("\(Date.now): task did error \(error)")
             }
+        
+            try await completion()
+
+        }
         
         self.requestTask = task
     }
@@ -78,8 +85,8 @@ extension TgglClient {
         return request
     }
     
-    /*
     func combine() {
+        print ("Combine.")
         URLSession.shared
             .dataTaskPublisher(for: urlRequest())
             .retry(1)
@@ -89,13 +96,13 @@ extension TgglClient {
                 }
                 return element.data
             }
-            .decode(type: [String: TgglValue?].self, decoder: JSONDecoder())
+            .decode(type: [[Tggl]].self, decoder: JSONDecoder())
             .sink(receiveCompletion: { print ("Received completion: \($0).") },
                   receiveValue: { user in print ("Received user: \(user).")})
     }
-     */
     
     func cancelCurrentRequest() {
+        print ("Cancel request.")
         if let task = requestTask {
             task.cancel()
             requestTask = nil

@@ -10,14 +10,20 @@ final class TgglClientTests: XCTestCase {
         XCTAssertEqual(client.flags.count, 0)
         
         client.startPolling(every: 3)
-                        
-        client.setContext(context: ["email": "pierre.kopaczewski@scenies.com"])
+
+        //sleep(5)
+
+        client.setContext(context: ["email": " "])
+        print("setContext pierre.kopaczewski@scenies.com")
 
         sleep(5)
         
         client.setContext(context: ["email": "zlobodan.debernardi@sadoma.so"])
+        print("setContext zlobodan.debernardi@sadoma.so")
                
         sleep(5)
+
+        XCTAssertEqual(client.flags.count, 1)
 
         print("Test ended")
     }
