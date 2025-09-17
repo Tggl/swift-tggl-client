@@ -13,6 +13,11 @@ extension TgglClient {
         case enabled(interval: TimeInterval)
     }
     
+    public enum FetchTrigger {
+        case polling
+        case contextChange
+    }
+    
     public enum NetworkError: Error {
         case invalidResponse
         case invalidHttpCode(Int)
@@ -21,9 +26,8 @@ extension TgglClient {
         case decodingError(Error)
     }
     
-    func fetch() {
-        print ("Fetch.")
-
+    func fetch(trigger: FetchTrigger) {
+        print ("Fetch: \(trigger)")
         cancelCurrentRequest()
         
         let completion = { [weak self] in
@@ -34,7 +38,7 @@ extension TgglClient {
             switch polling {
             case .enabled(let interval):
                 try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-                fetch()
+                fetch(trigger: .polling)
             case .disabled:
                 requestTask = nil
             }
@@ -50,14 +54,20 @@ extension TgglClient {
                 guard (200...299).contains(httpResponse.statusCode) else {
                     throw NetworkError.invalidHttpCode(httpResponse.statusCode)
                 }
-                      
-                let json = try JSONDecoder().decode([[Tggl]].self, from: data)
-                self.flags = json
                 
-                print("--- flags ---")
+                print("Data received: \(String(data: data, encoding: .utf8) ?? "(no data)")")
+                      
+                let jsonFlags = try JSONDecoder().decode([[Tggl]].self, from: data)
+                self.flags = jsonFlags
+                storage.save(flags: jsonFlags)
+                
+                print("--- flags (\(String(describing: flags.first?.count)) ---")
                 flags.first?.forEach {
                     print("\($0.key) - \($0.value)")
                 }
+                
+                print("flags: \(flags)")
+                
                 print("-------------")
 
             } catch {
@@ -77,6 +87,8 @@ extension TgglClient {
             "Content-Type": "application/json",
             "x-tggl-api-key": self.apiKey,
         ]
+        
+        print("request data: \(String(data: requestData, encoding: .utf8) ?? "(no data)")")
         var request = URLRequest(url: self.url)
         request.httpMethod = "POST"
         request.allHTTPHeaderFields = headers
@@ -85,24 +97,7 @@ extension TgglClient {
         return request
     }
     
-    func combine() {
-        print ("Combine.")
-        URLSession.shared
-            .dataTaskPublisher(for: urlRequest())
-            .retry(1)
-            .tryMap() { element -> Data in
-                guard let httpResponse = element.response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                    throw NetworkError.invalidResponse
-                }
-                return element.data
-            }
-            .decode(type: [[Tggl]].self, decoder: JSONDecoder())
-            .sink(receiveCompletion: { print ("Received completion: \($0).") },
-                  receiveValue: { user in print ("Received user: \(user).")})
-    }
-    
     func cancelCurrentRequest() {
-        print ("Cancel request.")
         if let task = requestTask {
             task.cancel()
             requestTask = nil

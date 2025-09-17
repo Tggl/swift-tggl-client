@@ -3,15 +3,19 @@ import Foundation
 public class TgglClient {
     let apiKey: String
     let url: URL
+    let storage: TgglStorage
+
     var flags: [[Tggl]]
     var context: [String:Any?] = [:]
     var polling: Polling = .disabled
     var requestTask: Task<Void, any Error>?
-    
-    public init(apiKey: String, url: String = "https://api.tggl.io/typed-flags", flags: [[Tggl]] = []) {
+        
+    public init(apiKey: String, url: String = "https://api.tggl.io/typed-flags") {
         self.apiKey = apiKey
         self.url = URL(string: url)!
-        self.flags = flags
+        self.storage = TgglStorage()
+        self.flags = storage.getFlags()
+        self.context = storage.getContext()
     }
     
     public func isActive(slug: String) -> Bool {
@@ -29,7 +33,7 @@ public class TgglClient {
     public func startPolling(every interval: TimeInterval) {
         polling = .enabled(interval: interval)
                 
-        fetch()
+        fetch(trigger: .polling)
     }
     
     public func stopPolling() {
@@ -38,9 +42,10 @@ public class TgglClient {
         cancelCurrentRequest()
     }
     
-    public func setContext(context: [String:Any?]) {
+    public func setContext(context: [String:Any]) {
         self.context = context
+        self.storage.save(context: context)
         
-        fetch()
+        fetch(trigger: .contextChange)
     }
 }
