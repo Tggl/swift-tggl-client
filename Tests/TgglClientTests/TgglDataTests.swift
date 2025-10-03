@@ -10,12 +10,16 @@ import XCTest
 
 final class TgglDataTests: XCTestCase {
     
+    override func setUp() async throws {
+        let storage = TgglStorage()
+        storage.clear()
+    }
+    
     let payload = """
 [[{"key":"eric","type":"string","stringValue":"flag"}]]
 """
     
     func testDecodeTgglFromJSONFile() throws {
-
         // Load the file data
         guard let data = payload.data(using: .utf8) else {
             return XCTFail("No payload")
