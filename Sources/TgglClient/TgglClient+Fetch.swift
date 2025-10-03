@@ -102,7 +102,7 @@ extension TgglClient {
     
     // MARK: - Request building & cancellation (actor-isolated)
     func urlRequest() -> URLRequest {
-        let requestData = try! JSONSerialization.data(withJSONObject: [self.context], options: [])
+        let requestData = try! JSONSerialization.data(withJSONObject: [self.getContext()], options: [])
         let headers = [
             "Content-Type": "application/json",
             "x-tggl-api-key": self.apiKey,

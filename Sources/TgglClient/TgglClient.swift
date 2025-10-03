@@ -6,7 +6,7 @@ public actor TgglClient {
     let storage: TgglStorage
 
     private var flags: [[Tggl]]
-    var context: [String:Any?] = [:]
+    private var context: [String:Any] = [:]
     var polling: Polling = .disabled
     var requestTask: Task<Void, Never>?
         
@@ -49,6 +49,10 @@ public actor TgglClient {
         polling = .disabled
         
         cancelCurrentRequest()
+    }
+    
+    public func getContext() -> [String:Any] {
+        context
     }
     
     public func setContext(context: [String:Any]) {
