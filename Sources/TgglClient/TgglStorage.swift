@@ -7,35 +7,41 @@
 
 import Foundation
 
-public struct TgglStorage {
+struct TgglStorage {
     
-    private let defaults = UserDefaults(suiteName: "tggl")
+    private let defaults: UserDefaults = UserDefaults(suiteName: "tggl") ?? .standard
     
     private let contextKey: String = "context"
     private let flagsKey: String = "flags"
 
     // context
     func save(context: [String: Any]) {
-        defaults?.set(context, forKey: contextKey)
+        // Only property-list-compatible values will be stored.
+        defaults.set(context, forKey: contextKey)
     }
     
     func getContext() -> [String: Any] {
-        print("getContext: \(defaults?.dictionary(forKey: contextKey) ?? [:])")
-        return defaults?.dictionary(forKey: contextKey) ?? [:]
+        defaults.dictionary(forKey: contextKey) ?? [:]
     }
     
     // flags
     func save(flags: [[Tggl]]) {
         if let data = try? JSONEncoder().encode(flags) {
-            defaults?.set(data, forKey: flagsKey)
+            defaults.set(data, forKey: flagsKey)
         }
     }
     
     func getFlags() -> [[Tggl]] {
-        if let data = defaults?.data(forKey: flagsKey),
+        if let data = defaults.data(forKey: flagsKey),
            let decoded = try? JSONDecoder().decode([[Tggl]].self, from: data) {
             return decoded
         }
         return []
+    }
+    
+    // convenience for tests or full reset
+    func clear() {
+        defaults.removeObject(forKey: contextKey)
+        defaults.removeObject(forKey: flagsKey)
     }
 }

@@ -5,10 +5,10 @@ public actor TgglClient {
     let url: URL
     let storage: TgglStorage
 
-    var flags: [[Tggl]]
+    private var flags: [[Tggl]]
     var context: [String:Any?] = [:]
     var polling: Polling = .disabled
-    var requestTask: Task<Void, any Error>?
+    var requestTask: Task<Void, Never>?
         
     public init(apiKey: String, url: String = "https://api.tggl.io/typed-flags") {
         self.apiKey = apiKey
@@ -16,6 +16,15 @@ public actor TgglClient {
         self.storage = TgglStorage()
         self.flags = storage.getFlags()
         self.context = storage.getContext()
+    }
+    
+    // Encapsulated accessors for flags
+    public func getFlags() -> [[Tggl]] {
+        flags
+    }
+    
+    func setFlags(_ newFlags: [[Tggl]]) {
+        flags = newFlags
     }
     
     public func isActive(slug: String) -> Bool {

@@ -6,6 +6,7 @@
 //
 
 import Foundation
+
 extension TgglClient {
     public enum Polling {
         case disabled
@@ -24,60 +25,82 @@ extension TgglClient {
     }
     
     func fetch(trigger: FetchTrigger) {
-        print ("Fetch: \(trigger)")
-        cancelCurrentRequest()
+        print("Fetch: \(trigger)")
         
-        let completion = { [weak self] in
-            guard let self = self else {
-                return
-            }
-            
-            switch await polling {
-            case .enabled(let interval):
-                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-                await fetch(trigger: .polling)
-            case .disabled:
-                await cancelCurrentRequest()
-            }
+        // If this is a context-driven refresh, cancel any in-flight request first
+        if case .contextChange = trigger {
+            cancelCurrentRequest()
         }
         
-        let task = Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(for: urlRequest())
-                
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    throw NetworkError.invalidResponse
-                }
-                guard (200...299).contains(httpResponse.statusCode) else {
-                    throw NetworkError.invalidHttpCode(httpResponse.statusCode)
-                }
-                
-                print("Data received: \(String(data: data, encoding: .utf8) ?? "(no data)")")
-                      
-                let jsonFlags = try JSONDecoder().decode([[Tggl]].self, from: data)
-                self.flags = jsonFlags
-                storage.save(flags: jsonFlags)
-                
-                print("--- flags (\(String(describing: flags.first?.count)) ---")
-                flags.first?.forEach {
-                    print("\($0.key) - \($0.value)")
-                }
-                
-                print("flags: \(flags)")
-                
-                print("-------------")
-
-            } catch {
-                print("\(Date.now): task did error \(error)")
-            }
-        
-            try await completion()
-
+        let task = Task { [weak self] in
+            guard let self = self else { return }
+            await self._fetchBody(trigger: trigger)
         }
         
         self.requestTask = task
     }
     
+    // MARK: - Internal fetch body (actor-isolated)
+    private func _fetchBody(trigger: FetchTrigger) async {
+        do {
+            let request = urlRequest()
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NetworkError.invalidResponse
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                throw NetworkError.invalidHttpCode(httpResponse.statusCode)
+            }
+            
+            print("Data received: \(String(data: data, encoding: .utf8) ?? "(no data)")")
+            
+            let jsonFlags = try JSONDecoder().decode([[Tggl]].self, from: data)
+            self.setFlags(jsonFlags)
+            storage.save(flags: jsonFlags)
+            
+            let currentFlags = getFlags()
+            print("--- flags (\(String(describing: currentFlags.first?.count)) ---")
+            currentFlags.first?.forEach {
+                print("\($0.key) - \($0.value)")
+            }
+            print("flags: \(currentFlags)")
+            print("-------------")
+            
+        } catch is CancellationError {
+            // Task was cancelled (either by stopPolling or a context change).
+            print("\(Date.now): fetch cancelled")
+            return
+        } catch {
+            print("\(Date.now): task did error \(error)")
+        }
+        
+        // Schedule the next polling cycle if enabled
+        await scheduleNextCycleIfNeeded()
+    }
+    
+    // MARK: - Polling scheduler
+    private func scheduleNextCycleIfNeeded() async {
+        switch polling {
+        case .enabled(let interval):
+            do {
+                // Sleep cooperates with cancellation
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                try Task.checkCancellation()
+                fetch(trigger: .polling)
+            } catch is CancellationError {
+                // Cancelled while sleeping; just stop.
+                print("\(Date.now): polling sleep cancelled")
+            } catch {
+                print("\(Date.now): polling sleep error \(error)")
+            }
+        case .disabled:
+            // Ensure we don't keep a finished task around
+            cancelCurrentRequest()
+        }
+    }
+    
+    // MARK: - Request building & cancellation (actor-isolated)
     func urlRequest() -> URLRequest {
         let requestData = try! JSONSerialization.data(withJSONObject: [self.context], options: [])
         let headers = [
