@@ -38,3 +38,7 @@ extension Tggl: Codable {
         value = try TgglValue.init(from: decoder)
     }
 }
+
+extension Tggl: Equatable {
+    
+}

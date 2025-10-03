@@ -1,12 +1,14 @@
 import Foundation
+import Combine
 
-public actor TgglClient {
+public actor TgglClient: ObservableObject {
     let apiKey: String
     let url: URL
     let storage: TgglStorage
 
-    private var flags: [[Tggl]]
-    var context: [String:Any?] = [:]
+    @Published private var flags: [[Tggl]] = []
+
+    private var context: [String:Any] = [:]
     var polling: Polling = .disabled
     var requestTask: Task<Void, Never>?
         
@@ -14,8 +16,16 @@ public actor TgglClient {
         self.apiKey = apiKey
         self.url = URL(string: url)!
         self.storage = TgglStorage()
-        self.flags = storage.getFlags()
-        self.context = storage.getContext()
+        
+        Task { [weak self] in
+            guard let self else { return }
+            
+            let initialFlags = await storage.getFlags()
+            await setFlags(initialFlags)
+            
+            let initialContext = await storage.getContext()
+            await setContext(context: initialContext)
+        }
     }
     
     // Encapsulated accessors for flags
@@ -49,6 +59,21 @@ public actor TgglClient {
         polling = .disabled
         
         cancelCurrentRequest()
+    }
+    
+    public func getSlugPublisher(slug: String) -> AnyPublisher<Tggl, Never> {
+        $flags
+            .compactMap({ tggl in
+                guard let flags = tggl.first else { return nil }
+                guard let flag = flags.first(where: { $0.key == slug }) else { return nil }
+                return flag
+            })
+            .removeDuplicates(by: { $0.value == $1.value })
+            .eraseToAnyPublisher()
+    }
+    
+    public func getContext() -> [String:Any] {
+        context
     }
     
     public func setContext(context: [String:Any]) {

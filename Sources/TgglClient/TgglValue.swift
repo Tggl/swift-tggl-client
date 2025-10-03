@@ -56,3 +56,7 @@ enum TgglValue: Codable {
         }
     }
 }
+
+extension TgglValue: Equatable {
+    
+}

@@ -12,7 +12,7 @@ final class TgglClientTests: XCTestCase {
         
         let client = TgglClient(apiKey: "kREFUsLPom692h8if8TPxdi18Zk-nSHjvaB1uBtYyAQ")
         
-        print("client.context : \(await client.context)")
+        print("client.context : \(await client.getContext())")
         
         let initialFlags = await client.getFlags()
         if let fl = initialFlags.first {
