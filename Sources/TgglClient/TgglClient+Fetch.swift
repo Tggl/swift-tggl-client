@@ -6,7 +6,6 @@
 //
 
 import Foundation
-
 extension TgglClient {
     public enum Polling {
         case disabled
@@ -21,9 +20,7 @@ extension TgglClient {
     public enum NetworkError: Error {
         case invalidResponse
         case invalidHttpCode(Int)
-        case requestFailed(Error)
         case invalidData
-        case decodingError(Error)
     }
     
     func fetch(trigger: FetchTrigger) {
@@ -35,12 +32,12 @@ extension TgglClient {
                 return
             }
             
-            switch polling {
+            switch await polling {
             case .enabled(let interval):
                 try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-                fetch(trigger: .polling)
+                await fetch(trigger: .polling)
             case .disabled:
-                requestTask = nil
+                await cancelCurrentRequest()
             }
         }
         

@@ -1,6 +1,6 @@
 import Foundation
 
-public class TgglClient {
+public actor TgglClient {
     let apiKey: String
     let url: URL
     let storage: TgglStorage
@@ -44,6 +44,8 @@ public class TgglClient {
     
     public func setContext(context: [String:Any]) {
         self.context = context
+        
+        print("setContext: \(context)")
         self.storage.save(context: context)
         
         fetch(trigger: .contextChange)

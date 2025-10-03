@@ -20,7 +20,8 @@ public struct TgglStorage {
     }
     
     func getContext() -> [String: Any] {
-        return defaults?.array(forKey: contextKey) as? [String: Any] ?? [:]
+        print("getContext: \(defaults?.dictionary(forKey: contextKey) ?? [:])")
+        return defaults?.dictionary(forKey: contextKey) ?? [:]
     }
     
     // flags

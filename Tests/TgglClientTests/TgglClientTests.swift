@@ -2,38 +2,44 @@ import XCTest
 @testable import TgglClient
 
 final class TgglClientTests: XCTestCase {
-    func testFlagsAreUpdatedWhenContextChanges() throws {
-        
+    func testFlagsAreUpdatedWhenContextChanges() async throws {
         print("Test started")
+        
+        // Start from scratch to avoid storage interference
+        let storage = TgglStorage()
+        storage.save(flags: [])
+        storage.save(context: [:])
+        
         let client = TgglClient(apiKey: "kREFUsLPom692h8if8TPxdi18Zk-nSHjvaB1uBtYyAQ")
         
-        // start from scratch to avoid storage interference
-        client.flags = [[]]
+        print("client.context : \(await client.context)")
         
-        if let fl = client.flags.first {
+        let initialFlags = await client.flags
+        if let fl = initialFlags.first {
             XCTAssertEqual(fl.count, 0)
         }
         
         // Start
-        client.startPolling(every: 3)
+        await client.startPolling(every: 3)
         
         print("Test initial state")
-        sleep(5)
-        XCTAssertEqual(client.flags.first?.count, 0)
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+        let flagsAfterStart = await client.flags
+        XCTAssertEqual(flagsAfterStart.first?.count, 0)
 
-        
         print("Test first context change")
-        client.setContext(context: ["email": "pierre.kopaczewski@scenies.com"])
+        await client.setContext(context: ["email": "pierre.kopaczewski@scenies.com"])
         print("setContext pierre.kopaczewski@scenies.com")
-        sleep(5)
-        XCTAssertEqual(client.flags.first?.count, 1)
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+        let flagsAfterFirstContext = await client.flags
+        XCTAssertEqual(flagsAfterFirstContext.first?.count, 1)
         
         print("Test second context change")
-        
-        client.setContext(context: ["email": "zlobodan.debernardi@sadoma.so"])
+        await client.setContext(context: ["email": "zlobodan.debernardi@sadoma.so"])
         print("setContext zlobodan.debernardi@sadoma.so")
-        sleep(5)
-        XCTAssertEqual(client.flags.first?.count, 0)
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+        let flagsAfterSecondContext = await client.flags
+        XCTAssertEqual(flagsAfterSecondContext.first?.count, 0)
 
         print("Test ended")
     }

@@ -81,4 +81,19 @@ final class TgglDataTests: XCTestCase {
         default: XCTFail("wrong bool")
         }
     }
+    
+    func testContext() async throws {
+        // Clear storage to isolate test
+        let storage = TgglStorage()
+        storage.save(context: [:])
+        
+        let client = TgglClient(apiKey: "")
+        await client.setContext(context: ["keyTest" : "valueTest"])
+        
+        let newStoredContext = storage.getContext()
+        
+        XCTAssertEqual(newStoredContext.keys.count, 1)
+        XCTAssertEqual(newStoredContext.keys.first, "keyTest")
+        XCTAssertEqual(newStoredContext["keyTest"] as! String, "valueTest")
+    }
 }

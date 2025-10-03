@@ -23,18 +23,6 @@ public struct Tggl {
         case intValue
         case boolValue
     }
-    
-    enum StringCodingKeys: String, CodingKey {
-        case stringValue
-    }
-    
-    enum IntCodingKeys: String, CodingKey {
-        case intValue
-    }
-    
-    enum BoolCodingKeys: String, CodingKey {
-        case boolValue
-    }
 }
 
 extension Tggl: Codable {
@@ -48,8 +36,5 @@ extension Tggl: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         key = try container.decode(String.self, forKey: .key)
         value = try TgglValue.init(from: decoder)
-        // try container.decode(TgglValue.self, forKey: .value)
     }
-    
-    //{\"key\":\"eric\",\"type\":\"string\",\"stringValue\":\"flag\"}
 }
