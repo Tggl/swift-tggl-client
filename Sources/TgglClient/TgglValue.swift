@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum TgglValue: Codable {
+public enum TgglValue: Codable {
     case string(string: String)
     case number(int: Int)
     case boolean(bool: Bool)
@@ -19,7 +19,7 @@ enum TgglValue: Codable {
         case boolValue
     }
     
-    func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .string(let s):
@@ -34,7 +34,7 @@ enum TgglValue: Codable {
         }
     }
     
-    init(from decoder: any Decoder) throws {
+    public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         

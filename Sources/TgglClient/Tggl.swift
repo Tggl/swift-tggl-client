@@ -13,8 +13,8 @@ public struct Tggl {
         case invalidType
     }
 
-    let `key`: String
-    let value: TgglValue
+    public let `key`: String
+    public let value: TgglValue
     
     enum CodingKeys: String, CodingKey {
         case `key`
