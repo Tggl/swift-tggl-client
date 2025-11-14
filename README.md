@@ -18,19 +18,15 @@ Instantiate the client
 
 Get the publisher
 ```
-    let publisher = await tgglClient.getSlugPublisher(slug: "bgColor")
+    let publisher = await tgglClient.publisher(for: "myFlag")
 ```
 
 Use the value
 ```
     publisher
-        .receive(on: RunLoop.main)
-        .sink { [weak self] tggl in
-            switch tggl.value {
-            case .string(let string):
-                self?.backgroundColor = Color(hex: string)
-            default:
-                break
+        .sink { tggl in
+            if let string = tggl.stringValue {
+                self?.variationValue = string
             }
         }
         .store(in: &cancellables)

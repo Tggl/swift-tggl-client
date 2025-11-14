@@ -25,6 +25,35 @@ public struct Tggl {
     }
 }
 
+extension Tggl {
+    var stringValue: String? {
+        switch value {
+            case .string(string: let string):
+            return string
+        default:
+            return nil
+        }
+    }
+    
+    var intValue: Int? {
+        switch value {
+        case .number(int: let int):
+            return int
+        default:
+            return nil
+        }
+    }
+    
+    var boolValue: Bool? {
+        switch value {
+        case .boolean(bool: let bool):
+            return bool
+        default:
+            return nil
+        }
+    }
+}
+
 extension Tggl: Codable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)

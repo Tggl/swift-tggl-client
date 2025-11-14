@@ -61,11 +61,11 @@ public actor TgglClient: ObservableObject {
         cancelCurrentRequest()
     }
     
-    public func getSlugPublisher(slug: String) -> AnyPublisher<Tggl, Never> {
+    public func publisher(for flag: String) -> AnyPublisher<Tggl, Never> {
         $flags
             .compactMap({ tggl in
                 guard let flags = tggl.first else { return nil }
-                guard let flag = flags.first(where: { $0.key == slug }) else { return nil }
+                guard let flag = flags.first(where: { $0.key == flag }) else { return nil }
                 return flag
             })
             .removeDuplicates(by: { $0.value == $1.value })

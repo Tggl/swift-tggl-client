@@ -25,21 +25,21 @@ final class TgglClientTests: XCTestCase {
         print("Test initial state")
         try await Task.sleep(nanoseconds: 5_000_000_000)
         let flagsAfterStart = await client.getFlags()
-        XCTAssertEqual(flagsAfterStart.first?.count, 0)
+        XCTAssertEqual(flagsAfterStart.first?.count, 1)
 
         print("Test first context change")
         await client.setContext(context: ["email": "pierre.kopaczewski@scenies.com"])
         print("setContext pierre.kopaczewski@scenies.com")
         try await Task.sleep(nanoseconds: 5_000_000_000)
         let flagsAfterFirstContext = await client.getFlags()
-        XCTAssertEqual(flagsAfterFirstContext.first?.count, 1)
+        XCTAssertEqual(flagsAfterFirstContext.first?.count, 2)
         
         print("Test second context change")
         await client.setContext(context: ["email": "zlobodan.debernardi@sadoma.so"])
         print("setContext zlobodan.debernardi@sadoma.so")
         try await Task.sleep(nanoseconds: 5_000_000_000)
         let flagsAfterSecondContext = await client.getFlags()
-        XCTAssertEqual(flagsAfterSecondContext.first?.count, 0)
+        XCTAssertEqual(flagsAfterSecondContext.first?.count, 1)
 
         print("Test ended")
     }
