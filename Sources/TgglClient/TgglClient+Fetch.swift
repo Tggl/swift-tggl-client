@@ -60,8 +60,8 @@ extension TgglClient {
             storage.save(flags: jsonFlags)
             
             let currentFlags = getFlags()
-            print("--- flags (\(String(describing: currentFlags.first?.count)) ---")
-            currentFlags.first?.forEach {
+            print("--- flags (\(String(describing: currentFlags.count)) ---")
+            currentFlags.forEach {
                 print("\($0.key) - \($0.value)")
             }
             print("flags: \(currentFlags)")

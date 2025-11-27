@@ -15,9 +15,7 @@ final class TgglClientTests: XCTestCase {
         print("client.context : \(await client.getContext())")
         
         let initialFlags = await client.getFlags()
-        if let fl = initialFlags.first {
-            XCTAssertEqual(fl.count, 0)
-        }
+        XCTAssertEqual(initialFlags.count, 0)
         
         // Start
         await client.startPolling(every: 3)
@@ -25,21 +23,21 @@ final class TgglClientTests: XCTestCase {
         print("Test initial state")
         try await Task.sleep(nanoseconds: 5_000_000_000)
         let flagsAfterStart = await client.getFlags()
-        XCTAssertEqual(flagsAfterStart.first?.count, 1)
+        XCTAssertEqual(flagsAfterStart.count, 1)
 
         print("Test first context change")
         await client.setContext(context: ["email": "pierre.kopaczewski@scenies.com"])
         print("setContext pierre.kopaczewski@scenies.com")
         try await Task.sleep(nanoseconds: 5_000_000_000)
         let flagsAfterFirstContext = await client.getFlags()
-        XCTAssertEqual(flagsAfterFirstContext.first?.count, 2)
+        XCTAssertEqual(flagsAfterFirstContext.count, 2)
         
         print("Test second context change")
         await client.setContext(context: ["email": "zlobodan.debernardi@sadoma.so"])
         print("setContext zlobodan.debernardi@sadoma.so")
         try await Task.sleep(nanoseconds: 5_000_000_000)
         let flagsAfterSecondContext = await client.getFlags()
-        XCTAssertEqual(flagsAfterSecondContext.first?.count, 1)
+        XCTAssertEqual(flagsAfterSecondContext.count, 1)
 
         print("Test ended")
     }

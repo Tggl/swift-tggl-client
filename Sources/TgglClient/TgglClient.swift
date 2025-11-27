@@ -1,10 +1,13 @@
 import Foundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public actor TgglClient: ObservableObject {
-    let apiKey: String
-    let url: URL
-    let storage: TgglStorage
+     let apiKey: String
+     let url: URL
+     let storage: TgglStorage
 
     @Published private var flags: [[Tggl]] = []
 
@@ -26,11 +29,13 @@ public actor TgglClient: ObservableObject {
             let initialContext = await storage.getContext()
             await setContext(context: initialContext)
         }
+
+        self.subscribeToAppStateNotifications()
     }
     
     // Encapsulated accessors for flags
-    public func getFlags() -> [[Tggl]] {
-        flags
+    public func getFlags() -> [Tggl] {
+        flags.first ?? []
     }
     
     func setFlags(_ newFlags: [[Tggl]]) {
@@ -83,5 +88,32 @@ public actor TgglClient: ObservableObject {
         self.storage.save(context: context)
         
         fetch(trigger: .contextChange)
+    }
+}
+
+extension TgglClient {
+    func subscribeToAppStateNotifications() {
+        // Observe app lifecycle (iOS only)
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil,queue: .main) { [weak self] _ in
+            guard let self else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                if polling == .enabled(interval: _) {
+                    cancelCurrentRequest()
+                }
+            }
+        }
+        
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil,queue: .main) { [weak self] _ in
+            guard let self else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                if polling == .enabled(interval: _) {
+                    fetch(fetch(trigger: .polling))
+                }
+            }
+        }
+        #endif
     }
 }
