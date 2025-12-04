@@ -8,6 +8,7 @@ public actor TgglClient: ObservableObject {
      let apiKey: String
      let url: URL
      let storage: TgglStorage
+     let session: URLSession
 
     @Published private var flags: [[Tggl]] = []
 
@@ -15,10 +16,11 @@ public actor TgglClient: ObservableObject {
     var polling: Polling = .disabled
     var requestTask: Task<Void, Never>?
         
-    public init(apiKey: String, url: String = "https://api.tggl.io/typed-flags") {
+    public init(apiKey: String, url: String = "https://api.tggl.io/typed-flags", session: URLSession = .shared) {
         self.apiKey = apiKey
         self.url = URL(string: url)!
         self.storage = TgglStorage()
+        self.session = session
         
         Task { [weak self] in
             guard let self else { return }

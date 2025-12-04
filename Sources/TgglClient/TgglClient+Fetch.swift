@@ -44,7 +44,7 @@ extension TgglClient {
     private func _fetchBody(trigger: FetchTrigger) async {
         do {
             let request = urlRequest()
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.invalidResponse
