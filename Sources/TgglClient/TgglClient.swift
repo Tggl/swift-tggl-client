@@ -99,7 +99,7 @@ extension TgglClient {
             guard let self else { return }
             Task { [weak self] in
                 guard let self else { return }
-                if polling == .enabled(interval: _) {
+                if case .enabled = polling {
                     cancelCurrentRequest()
                 }
             }
@@ -109,8 +109,8 @@ extension TgglClient {
             guard let self else { return }
             Task { [weak self] in
                 guard let self else { return }
-                if polling == .enabled(interval: _) {
-                    fetch(fetch(trigger: .polling))
+                if case .enabled = polling {
+                    fetch(trigger: .polling)
                 }
             }
         }
