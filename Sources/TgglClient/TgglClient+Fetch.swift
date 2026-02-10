@@ -25,8 +25,6 @@ extension TgglClient {
     }
     
     func fetch(trigger: FetchTrigger) {
-        print("Fetch: \(trigger)")
-        
         // If this is a context-driven refresh, cancel any in-flight request first
         if case .contextChange = trigger {
             cancelCurrentRequest()
@@ -52,24 +50,13 @@ extension TgglClient {
             guard (200...299).contains(httpResponse.statusCode) else {
                 throw NetworkError.invalidHttpCode(httpResponse.statusCode)
             }
-            
-            print("Data received: \(String(data: data, encoding: .utf8) ?? "(no data)")")
-            
+                        
             let jsonFlags = try JSONDecoder().decode([[Tggl]].self, from: data)
             self.setFlags(jsonFlags)
             storage.save(flags: jsonFlags)
             
-            let currentFlags = getFlags()
-            print("--- flags (\(String(describing: currentFlags.count)) ---")
-            currentFlags.forEach {
-                print("\($0.key) - \($0.value)")
-            }
-            print("flags: \(currentFlags)")
-            print("-------------")
-            
         } catch is CancellationError {
             // Task was cancelled (either by stopPolling or a context change).
-            print("\(Date.now): fetch cancelled")
             return
         } catch {
             print("\(Date.now): task did error \(error)")
@@ -90,7 +77,6 @@ extension TgglClient {
                 fetch(trigger: .polling)
             } catch is CancellationError {
                 // Cancelled while sleeping; just stop.
-                print("\(Date.now): polling sleep cancelled")
             } catch {
                 print("\(Date.now): polling sleep error \(error)")
             }
@@ -108,7 +94,6 @@ extension TgglClient {
             "x-tggl-api-key": self.apiKey,
         ]
         
-        print("request data: \(String(data: requestData, encoding: .utf8) ?? "(no data)")")
         var request = URLRequest(url: self.url)
         request.httpMethod = "POST"
         request.allHTTPHeaderFields = headers
