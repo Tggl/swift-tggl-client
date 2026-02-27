@@ -113,32 +113,18 @@ print("Current context: \(currentContext)")
 
 ## Reading Flags
 
-### Check if a Flag is Active
-
-```swift
-let isFeatureEnabled = await client.isActive(slug: "newFeature")
-if isFeatureEnabled {
-    // Feature is enabled for this user
-}
-```
-
 ### Get Flag Value
 
-```swift
-if let flag = await client.get(slug: "welcomeMessage") {
-    // Access typed values
-    if let message = flag.stringValue {
-        print("Welcome message: \(message)")
-    }
-}
-```
-
-### Get Flag with Default Value
+The `get` method requires a default value that is returned if the flag is not found:
 
 ```swift
-let flag = await client.get(slug: "maxItems", defaultValue: nil)
-if let count = flag?.intValue {
-    print("Max items: \(count)")
+let flag = await client.get(
+    slug: "welcomeMessage",
+    defaultValue: Tggl(key: "welcomeMessage", value: .string("Hello!"))
+)
+
+if let message = flag.stringValue {
+    print("Welcome message: \(message)")
 }
 ```
 
