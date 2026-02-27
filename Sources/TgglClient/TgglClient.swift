@@ -69,11 +69,14 @@ public actor TgglClient: ObservableObject {
             Task { [weak self] in
                 guard let self else { return }
 
-                let initialFlags = await storage.getFlags()
-                await setFlags(initialFlags)
-
-                let initialContext = await storage.getContext()
+                let initialFlags = storage.getFlags()
+                let initialContext = storage.getContext()
                 await setContext(context: initialContext)
+
+                if !(initialFlags.first ?? []).isEmpty {
+                    await setFlags(initialFlags)
+                    await markReady()
+                }
             }
         }
 
