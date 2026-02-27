@@ -324,9 +324,8 @@ final class TgglClientTests: XCTestCase {
         await client.setContext(context: [:])
         try await Task.sleep(nanoseconds: 200_000_000)
 
-        let defaultTggl = Tggl(key: "missing", value: .string("default"))
-        let result = await client.get(slug: "missing", defaultValue: defaultTggl)
-        XCTAssertEqual(result.value, .string("default"))
+        let result = await client.get(slug: "missing", defaultValue: .string("default"))
+        XCTAssertEqual(result, .string("default"))
     }
 
     func testGetReturnsActualFlagWhenPresent() async throws {
@@ -340,9 +339,8 @@ final class TgglClientTests: XCTestCase {
         await client.setContext(context: [:])
         try await Task.sleep(nanoseconds: 200_000_000)
 
-        let defaultTggl = Tggl(key: "myFlag", value: .boolean(false))
-        let result = await client.get(slug: "myFlag", defaultValue: defaultTggl)
-        XCTAssertEqual(result.value, .boolean(true))
+        let result = await client.get(slug: "myFlag", defaultValue: .boolean(false))
+        XCTAssertEqual(result, .boolean(true))
     }
 
     // MARK: - Init options

@@ -88,7 +88,7 @@ public actor TgglClient: ObservableObject {
         flags = newFlags
     }
 
-    public func get(slug: String, defaultValue: Tggl) -> Tggl {
+    public func get(slug: String, defaultValue: TgglValue) -> TgglValue {
         let result = self.flags.first?.first(where: { $0.key == slug })
 
         if let reporting {
@@ -96,13 +96,13 @@ public actor TgglClient: ObservableObject {
                 await reporting.reportFlag(
                     slug: slug,
                     value: result?.value,
-                    defaultValue: defaultValue.value,
+                    defaultValue: defaultValue,
                     clientId: clientId
                 )
             }
         }
 
-        return result ?? defaultValue
+        return result?.value ?? defaultValue
     }
 
     public func startPolling(every interval: TimeInterval) {
