@@ -1,229 +1,456 @@
-# Tggl Swift client
+<div align="center">
 
-Feature flags for iOS and macOS apps, powered by [Tggl](https://tggl.io).
+# Tggl Swift Client
 
-- **Synchronous, typed reads**: `tggl.get("my-feature", default: false)` from any thread, no `await`.
-- **Safe by design**: any inactive, deleted or unknown flag (or a network error) gives your default value.
-- **SwiftUI ready**: `TgglClient` is an `ObservableObject`; Combine publishers are also available.
-- **Offline first**: last flags are cached and used on the next launch, for the same context.
-- iOS 16+, macOS 14+, Swift 5.9+.
+**Feature flags for iOS and macOS apps, powered by [Tggl](https://tggl.io).**
 
-## Installation
+![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white)
+![iOS 16+](https://img.shields.io/badge/iOS-16%2B-000000?logo=apple)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)
+![SPM](https://img.shields.io/badge/SPM-compatible-brightgreen)
 
-```swift
-dependencies: [
-    .package(url: "https://github.com/Tggl/swift-tggl-client", from: "2.0.0")
-]
-```
-
-## Quick start
+</div>
 
 ```swift
-import TgglClient
-
-let tggl = TgglClient(apiKey: "YOUR_CLIENT_API_KEY", context: ["userId": user.id, "plan": user.plan])
-
 if tggl.get("new-checkout", default: false) {
     showNewCheckout()
 }
 ```
 
-> Use a **client** API key. Never ship a server key in an app.
+---
 
-## How Tggl evaluates flags
+## Contents
 
-The client uses [remote evaluation](https://tggl.io/developers/evaluating-flags/remote-evaluation):
+- [Why this client](#why-this-client)
+- [How it works](#how-it-works)
+- [Installation](#installation)
+- [Setup](#setup)
+- [Usage](#usage)
+  - [Reading flags](#reading-flags)
+  - [Managing the context](#managing-the-context)
+  - [SwiftUI](#swiftui)
+  - [UIKit and Combine](#uikit-and-combine)
+  - [Waiting for flags](#waiting-for-flags)
+  - [Keeping flags up to date](#keeping-flags-up-to-date)
+  - [Handling errors](#handling-errors)
+  - [Previews and tests](#previews-and-tests)
+- [Configuration](#configuration)
+- [API reference](#api-reference)
 
-1. The context (user id, plan, country…) is sent to Tggl **once per context change**.
-2. Tggl returns the value of every flag **active** for this context.
-3. `get` reads that result in memory. It never calls the network.
+---
 
-A flag gives the **default value** you pass to `get` when it is inactive for the context,
-archived or deleted, not loaded yet, or of an unexpected type. The default also applies when Tggl is unreachable.
-Pick defaults that keep the app safe in all those cases.
+## Why this client
 
-Tggl does not push changes: call `refetch()` or enable polling to pick them up without a context change.
+| | |
+|---|---|
+| ⚡️ **Synchronous, typed reads** | `get("flag", default: false)` returns a `Bool`, from any thread, with no `await`. |
+| 🛡 **Safe by default** | Inactive, deleted or unknown flags, type mismatches and network errors all return your default value. |
+| 🎨 **SwiftUI ready** | `TgglClient` is an `ObservableObject`: views re-render when flags change. |
+| 📡 **Reactive** | Combine publishers emit the current value, then each change, including when a flag is switched off. |
+| 📴 **Offline first** | The last flags are cached and used at the next launch, before the network answers. |
+| 🔁 **Resilient** | Retries with backoff, Tggl Proxy support, automatic fallback to the Tggl API. |
+| 📊 **Usage stats** | Evaluations are batched and reported to your Tggl dashboard. |
 
-## Reading flags
+## How it works
 
-```swift
-let enabled = tggl.get("my-feature", default: false)         // Bool
-let color   = tggl.get("button-color", default: "#000000")   // String
-let limit   = tggl.get("max-items", default: 10)             // Int (exact integers only)
-let ratio   = tggl.get("ratio", default: 0.5)                // Double
-let tags    = tggl.get("tags", default: [String]())          // [String]
-let raw     = tggl.get("config", default: TgglValue.null)    // TgglValue
+The client uses [remote evaluation](https://tggl.io/developers/evaluating-flags/remote-evaluation): your rules stay on Tggl's side, the app only receives results.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Client as TgglClient
+    participant API as Tggl API
+
+    App->>Client: setContext(["userId": "42", "plan": "pro"])
+    Client->>API: POST /typed-flags (one call per context change)
+    API-->>Client: values of the flags active for this context
+    Client-->>App: flags are ready
+    App->>Client: get("new-checkout", default: false)
+    Client-->>App: true (read from memory, no network call)
 ```
 
-The type of the default decides the expected type. A flag of another type returns the default.
+**One rule to remember: Tggl only returns the flags that are active for the context.** Whenever a flag can't be evaluated, `get` returns the default value you pass. That happens when the flag is:
 
-### JSON flags
+- inactive for this user, archived or deleted;
+- not loaded yet (first launch, before the first response);
+- of another type than your default;
+- unreachable because of a network error.
+
+👉 Always pick the default that keeps your app safe, usually the "old" behavior.
+
+## Installation
+
+### Xcode
+
+1. **File › Add Package Dependencies…**
+2. Paste `https://github.com/Tggl/swift-tggl-client`
+3. Choose **Up to Next Major Version** from `2.0.0` and add the **TgglClient** library to your app target.
+
+### Package.swift
 
 ```swift
-struct Banner: Codable { let title: String; let color: String }
-
-let banner = tggl.decode("banner", as: Banner.self, default: Banner(title: "", color: "#000"))
+dependencies: [
+    .package(url: "https://github.com/Tggl/swift-tggl-client", from: "2.0.0")
+],
+targets: [
+    .target(name: "MyApp", dependencies: [
+        .product(name: "TgglClient", package: "swift-tggl-client")
+    ])
+]
 ```
 
-### Null values
+**Requirements:** iOS 16+ or macOS 14+, Swift 5.9+ (Xcode 15+).
 
-A flag can be active with a `null` value. It is read as `nil` with an optional default:
+## Setup
 
-```swift
-let coupon = tggl.get("coupon", default: Optional("WELCOME")) // nil if the flag is active with null
-```
+### 1. Get a client API key
 
-With a non-optional default, `null` is a type mismatch and returns the default.
+In the Tggl dashboard, open **[API keys](https://app.tggl.io/project/default/api-keys)** and copy the **client** key.
 
-### All flags
+> [!WARNING]
+> Only ship the **client** key in an app. The server key gives access to your whole flag configuration and must never leave your backend.
 
-```swift
-let all: [String: TgglValue] = tggl.flags
-```
+### 2. Create one client for the whole app
 
-## Context
+Create a single `TgglClient` when the app starts and share it. It starts fetching flags right away.
 
-```swift
-// Replace the whole context (e.g. on login)
-await tggl.setContext(["userId": user.id, "email": user.email, "plan": "premium", "seats": 3])
-
-// Merge some keys into the current context
-await tggl.updateContext(["plan": "enterprise"])
-
-// Logout
-await tggl.setContext([:])
-```
-
-- Values can be `String`, `Int`, `Double`, `Bool`, arrays, dictionaries, `TgglValue`, or `nil`. A `nil` value is sent as `null`.
-- Each change triggers one network call. The method returns once the new flags are applied.
-- If contexts change quickly, only the response for the **latest** context is applied.
-- When `context` is omitted at init, the context of the previous launch is reused.
-
-## Readiness
-
-The client is ready after the first response, even a failed one. It is also ready
-immediately when flags were cached by a previous launch for the same context. Before that, `get` returns defaults.
+**SwiftUI**
 
 ```swift
-await tggl.waitReady()
-if tggl.isReady { … }
-```
+import SwiftUI
+import TgglClient
 
-## SwiftUI
-
-`TgglClient` is an `ObservableObject`. Views re-render when flags change:
-
-```swift
 @main
 struct MyApp: App {
     @StateObject private var tggl = TgglClient(apiKey: "YOUR_CLIENT_API_KEY")
 
     var body: some Scene {
-        WindowGroup { ContentView().environmentObject(tggl) }
-    }
-}
-
-struct ContentView: View {
-    @EnvironmentObject private var tggl: TgglClient
-
-    var body: some View {
-        if tggl.get("new-home", default: false) {
-            NewHomeView()
-        } else {
-            HomeView()
+        WindowGroup {
+            ContentView()
+                .environmentObject(tggl)
         }
     }
 }
 ```
 
-For previews and tests, set flags locally without any network call:
+**UIKit, or any shared service**
 
 ```swift
-let tggl = TgglClient(apiKey: "", options: TgglOptions(initialFetch: false, reporting: false, cache: .disabled))
-tggl.setFlags(["new-home": true])
+import TgglClient
+
+enum FeatureFlags {
+    static let client = TgglClient(
+        apiKey: "YOUR_CLIENT_API_KEY",
+        options: TgglOptions(appName: "MyApp")
+    )
+}
 ```
 
-## Combine
+### 3. Tell Tggl who the user is
+
+Send the context as soon as you know the user. Each property can then be used in your flag rules (percentage rollouts, segments, plans…).
 
 ```swift
-tggl.publisher(for: "new-checkout", default: false)
-    .sink { [weak self] enabled in self?.showNewCheckout = enabled }
-    .store(in: &cancellables)
+func didLogIn(_ user: User) async {
+    await tggl.setContext([
+        "userId": user.id,
+        "email": user.email,      // String? — nil is sent as null
+        "plan": user.plan.rawValue,
+        "country": user.country,
+        "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+    ])
+}
+
+func didLogOut() async {
+    await tggl.setContext([:])
+}
 ```
 
-The publisher emits the current value, then each change. When a flag is switched off in Tggl,
-it disappears from the evaluation and the publisher emits the **default value**.
-Updates are delivered on the main thread.
+That's it, you can now read flags anywhere. 🎉
 
-Other publishers: `flagsPublisher`, `isReadyPublisher` and `errorPublisher`.
+## Usage
 
-## Polling
+### Reading flags
+
+The **type of the default** decides the expected type of the flag:
 
 ```swift
-let tggl = TgglClient(apiKey: "…", options: TgglOptions(pollingInterval: 60))
-// or at any time
-tggl.startPolling(every: 60)
+let enabled  = tggl.get("new-checkout", default: false)         // Bool
+let variant  = tggl.get("onboarding-variant", default: "control") // String
+let maxItems = tggl.get("cart-max-items", default: 10)           // Int (exact integers only)
+let ratio    = tggl.get("discount-ratio", default: 0.0)          // Double
+let tags     = tggl.get("home-sections", default: [String]())    // [String]
+```
+
+#### Feature toggle
+
+```swift
+if tggl.get("new-checkout", default: false) {
+    NewCheckoutFlow().start()
+} else {
+    LegacyCheckoutFlow().start()
+}
+```
+
+#### A/B test
+
+```swift
+switch tggl.get("paywall-variant", default: "control") {
+case "annual-first": showPaywall(highlight: .annual)
+case "trial":        showPaywall(highlight: .trial)
+default:             showPaywall(highlight: .monthly)
+}
+```
+
+#### Remote configuration with JSON flags
+
+```swift
+struct Banner: Codable {
+    let title: String
+    let message: String
+    let color: String
+}
+
+let banner = tggl.decode(
+    "home-banner",
+    as: Banner.self,
+    default: Banner(title: "Welcome", message: "", color: "#000000")
+)
+```
+
+#### Null values
+
+A flag can be active with a `null` value. Use an optional default to tell it apart:
+
+```swift
+let coupon = tggl.get("promo-coupon", default: Optional("WELCOME10"))
+// "WELCOME10" → flag inactive or unknown
+// nil         → flag active with a null value
+// "SUMMER25"  → flag active with this value
+```
+
+#### Kill switch
+
+Default to the **safe** behavior, so that the feature stays off if Tggl can't be reached:
+
+```swift
+guard !tggl.get("disable-video-upload", default: false) else {
+    return showMaintenanceMessage()
+}
+```
+
+### Managing the context
+
+```swift
+// Replace the whole context
+await tggl.setContext(["userId": "42", "plan": "free"])
+
+// Merge a few keys, keeping the others
+await tggl.updateContext(["plan": "pro"])
+
+// Read it back
+let context = tggl.context   // ["userId": "42", "plan": "pro"]
+```
+
+- Each change triggers **one** network call. The method returns once the new flags are applied (or the call failed).
+- If the context changes several times quickly, only the response for the **latest** context is applied.
+- Values can be `String`, `Int`, `Double`, `Bool`, arrays, dictionaries, `TgglValue` or `nil`.
+
+### SwiftUI
+
+Views that read the client re-render automatically when flags change:
+
+```swift
+struct HomeView: View {
+    @EnvironmentObject private var tggl: TgglClient
+
+    var body: some View {
+        VStack {
+            if tggl.get("show-stories", default: false) {
+                StoriesCarousel()
+            }
+            Feed()
+        }
+        .navigationTitle(tggl.get("home-title", default: "Home"))
+    }
+}
+```
+
+Updating the context from a view:
+
+```swift
+.task(id: session.user?.id) {
+    if let user = session.user {
+        await tggl.setContext(["userId": user.id, "plan": user.plan])
+    } else {
+        await tggl.setContext([:])
+    }
+}
+```
+
+### UIKit and Combine
+
+`publisher(for:default:)` emits the current value, then each change, on the main thread:
+
+```swift
+import Combine
+
+final class CheckoutViewController: UIViewController {
+    private var cancellables = Set<AnyCancellable>()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        FeatureFlags.client.publisher(for: "express-checkout", default: false)
+            .sink { [weak self] enabled in
+                self?.expressButton.isHidden = !enabled
+            }
+            .store(in: &cancellables)
+    }
+}
+```
+
+> [!NOTE]
+> When a flag is switched off in Tggl, it disappears from the evaluation and the publisher emits the **default value**. Your UI goes back to the safe state on its own.
+
+Other publishers: `flagsPublisher` (all flags), `isReadyPublisher` and `errorPublisher`.
+
+### Waiting for flags
+
+The client is **ready** after the first response, even a failed one. It is ready immediately when flags were cached by a previous launch for the same context. Before that, `get` returns defaults.
+
+Hold the splash screen until flags are known, with a timeout so a slow network never blocks the user:
+
+```swift
+struct RootView: View {
+    @EnvironmentObject private var tggl: TgglClient
+    @State private var isLoading = true
+
+    var body: some View {
+        Group {
+            if isLoading { SplashView() } else { MainView() }
+        }
+        .task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await tggl.waitReady() }
+                group.addTask { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+                await group.next()
+                group.cancelAll()
+            }
+            isLoading = false
+        }
+    }
+}
+```
+
+You can also check `tggl.isReady` synchronously.
+
+### Keeping flags up to date
+
+Tggl does not push changes to apps. To pick up a change without a context change, refresh or poll:
+
+```swift
+await tggl.refetch()                 // one-off refresh, e.g. on pull-to-refresh
+
+tggl.startPolling(every: 60)         // every minute
 tggl.stopPolling()
-await tggl.refetch() // one-off refresh
+
+// or at creation
+TgglClient(apiKey: "…", options: TgglOptions(pollingInterval: 60))
 ```
 
-On iOS, polling pauses in background and refreshes as soon as the app returns to the foreground.
+On iOS, polling pauses while the app is in background and refreshes as soon as it comes back.
 
-## Errors
+### Handling errors
 
-Reading flags never throws. Failed requests keep the last known flags, and you can observe them:
+Reading flags never throws: on failure the client keeps the last known flags (or defaults). Errors are there for monitoring:
 
 ```swift
-if let error = tggl.lastError { … }          // cleared by the next successful request
+if let error = tggl.lastError {          // cleared after the next successful call
+    logger.warning("\(error.localizedDescription)")
+}
 
 tggl.errorPublisher
-    .sink { error in logger.error("\(error.localizedDescription)") }
+    .sink { error in Analytics.track("tggl_error", ["error": "\(error)"]) }
     .store(in: &cancellables)
 ```
 
-| Error | Retried |
-|---|---|
-| `.invalidApiKey` (401) | no, and other URLs are not tried |
-| `.badRequest` (400) | no, and other URLs are not tried |
-| `.httpStatus` 408, 429, 5xx | yes |
-| `.httpStatus` (other) | no, next URL is tried |
-| `.network` (offline, timeout…) | yes |
-| `.invalidResponse` | no, next URL is tried |
+| `TgglError` | Cause | Behavior |
+|---|---|---|
+| `.invalidApiKey` | 401 | Not retried, other URLs not tried |
+| `.badRequest` | 400 | Not retried, other URLs not tried |
+| `.httpStatus(code)` | 408, 429, 5xx | Retried with backoff, then next URL |
+| `.httpStatus(code)` | Other status | Next URL |
+| `.network(URLError)` | Offline, timeout, DNS… | Retried with backoff, then next URL |
+| `.invalidResponse` | Unreadable body | Next URL |
 
-## Options
+### Previews and tests
+
+Set flags locally, without any network call:
+
+```swift
+#Preview {
+    let tggl = TgglClient(
+        apiKey: "",
+        options: TgglOptions(initialFetch: false, reporting: false, cache: .disabled)
+    )
+    tggl.setFlags(["show-stories": true, "home-title": "Preview"])
+
+    return HomeView().environmentObject(tggl)
+}
+```
+
+In unit tests, inject a `URLSession` with a mock `URLProtocol` through `TgglOptions(session:)`, and call `await tggl.close()` at the end of each test.
+
+## Configuration
+
+Every option has a sensible default:
 
 ```swift
 let tggl = TgglClient(
-    apiKey: "…",
-    context: ["userId": "abc"],
+    apiKey: "YOUR_CLIENT_API_KEY",
+    context: ["userId": "42"],
     options: TgglOptions(
-        baseUrls: [URL(string: "https://tggl-proxy.example.com")!], // Tggl Proxy, tried first
-        fallbackToTgglApi: true,     // append https://api.tggl.io as last resort (default)
-        maxRetries: 3,               // per URL, backoff 100 → 500 ms
-        timeout: 8,                  // per request, in seconds
-        initialFetch: true,          // fetch at init
-        pollingInterval: nil,        // seconds, nil = disabled
-        reporting: true,             // send evaluation stats to Tggl
-        reportingInterval: 5,        // seconds
-        appName: "MyApp",            // shown in the Tggl dashboard
-        cache: .userDefaults,        // .disabled or .custom(MyStorage())
+        baseUrls: [URL(string: "https://tggl-proxy.example.com")!],
+        fallbackToTgglApi: true,
+        maxRetries: 3,
+        timeout: 8,
+        initialFetch: true,
+        pollingInterval: nil,
+        reporting: true,
+        reportingInterval: 5,
+        appName: "MyApp",
+        cache: .userDefaults,
         session: .shared
     )
 )
 ```
 
+| Option | Default | Description |
+|---|---|---|
+| `baseUrls` | `[]` | Tggl Proxy URLs, tried in order, each with its own retries. |
+| `fallbackToTgglApi` | `true` | Append `https://api.tggl.io` as last resort. Set `false` if contexts must never leave your infrastructure. |
+| `maxRetries` | `3` | Retries per URL, backoff 100 ms → 500 ms. |
+| `timeout` | `8` | Timeout of each request, in seconds. |
+| `initialFetch` | `true` | Fetch flags as soon as the client is created. |
+| `pollingInterval` | `nil` | Polling interval in seconds, `nil` to disable. |
+| `reporting` | `true` | Send evaluation stats to the Tggl dashboard. |
+| `reportingInterval` | `5` | Seconds between two reporting batches. |
+| `appName` | `nil` | Shown in the dashboard, e.g. `swift-client:2.0.0/TgglClient/MyApp`. |
+| `cache` | `.userDefaults` | `.userDefaults`, `.disabled` or `.custom(TgglStorage)`. |
+| `session` | `.shared` | `URLSession` used for all calls. |
+
 ### Cache
 
-By default, the last context and flags are stored in `UserDefaults`, separately for each API key.
-Cached flags are only reused when the client starts with the same context (or without an explicit
-context), so a new user never sees the previous user's flags.
-The context may contain personal data (email, ids…). If you need encryption,
-provide your own `TgglStorage` (e.g. backed by the Keychain):
+The last context and its flags are stored per API key and reused at the next launch **only for the same context**, so a new user never sees the previous user's flags.
+
+> [!IMPORTANT]
+> The context may contain personal data (email, ids…). The default storage is `UserDefaults`, which is not encrypted. If needed, provide your own storage, e.g. backed by the Keychain:
 
 ```swift
 final class KeychainStorage: TgglStorage {
-    func load() -> Data? { … }
-    func save(_ data: Data) { … }
+    func load() -> Data? { Keychain.read("tggl-cache") }
+    func save(_ data: Data) { Keychain.write("tggl-cache", data) }
 }
 
 TgglOptions(cache: .custom(KeychainStorage()))
@@ -231,39 +458,48 @@ TgglOptions(cache: .custom(KeychainStorage()))
 
 ### Tggl Proxy
 
-URLs in `baseUrls` are tried in order, each with its own retries. `https://api.tggl.io` is appended
-as the last fallback, so the app keeps working if your proxy is down. Set `fallbackToTgglApi: false`
-if contexts must never leave your infrastructure.
-
-## Reporting
-
-Each call to `get` is counted and sent to Tggl every 5 seconds. This feeds the flag usage
-statistics in the dashboard. Counts are kept and retried if the network fails, and flushed
-when the app goes to background. Disable it with `reporting: false`, or send now with
-`await tggl.flushReporting()`.
-
-## Shutdown
-
 ```swift
-await tggl.close() // stops polling and network calls, sends the last reporting batch
+TgglOptions(baseUrls: [
+    URL(string: "https://tggl-proxy-1.example.com")!,
+    URL(string: "https://tggl-proxy-2.example.com")!,
+])
+// → proxy-1, then proxy-2, then https://api.tggl.io
 ```
 
-## Migrating from 1.x
+### Reporting
 
-| 1.x | 2.0 |
+Each evaluation is counted and sent in batches to feed the usage stats of your dashboard. Counts are kept if the network fails, and flushed when the app goes to background or when the client is closed.
+
+```swift
+await tggl.flushReporting()   // send now
+await tggl.close()            // stop everything and send the last batch
+```
+
+## API reference
+
+| Member | Description |
 |---|---|
-| `TgglClient` is an `actor`, every call needs `await` | `get`, `flags`, `context`, `isReady` and `lastError` are synchronous; only `setContext`, `refetch`, `waitReady` and `close` are `async` |
-| `await client.get(slug: "f", defaultValue: .boolean(false))` → `TgglValue` | `client.get("f", default: false)` → `Bool` |
-| `getFlags()` → `[Tggl]` | `flags` → `[String: TgglValue]` |
-| `setContext(context: [String: Any])` | `setContext(_:)` with typed values, plus `updateContext(_:)` |
-| `publisher(for:)` → `Tggl`, silent when the flag is switched off | `publisher(for:default:)` → typed value, emits the default when the flag is switched off |
-| `getIsReady()`, `getError()`, `isReadyPublisher()`, `errorPublisher()` | `isReady`, `lastError`, `isReadyPublisher`, `errorPublisher` |
-| `TgglClient(apiKey:baseUrls:session:maxRetries:timeoutMs:appName:reporting:initialFetch:)` | `TgglClient(apiKey:context:options:)` |
-| `Tggl` struct | removed: use `TgglValue` |
+| `init(apiKey:context:options:)` | Creates the client and starts fetching flags. |
+| `get(_:default:) -> T` | Typed value of a flag, or the default. Synchronous. |
+| `decode(_:as:default:) -> T` | Decodes a JSON flag into a `Decodable` type. |
+| `flags` | All active flags, `[String: TgglValue]`. |
+| `context` | Current context. |
+| `setContext(_:) async` | Replaces the context and re-evaluates flags. |
+| `updateContext(_:) async` | Merges keys into the context and re-evaluates flags. |
+| `refetch() async` | Re-evaluates flags for the current context. |
+| `startPolling(every:)` / `stopPolling()` / `isPolling` | Periodic refresh. |
+| `isReady` / `waitReady() async` | Whether flags are known. |
+| `lastError` | Error of the last call, `nil` after a success. |
+| `publisher(for:default:)` | Typed value of a flag, then each change. |
+| `flagsPublisher` / `isReadyPublisher` / `errorPublisher` | Other Combine publishers. |
+| `setFlags(_:)` | Local flags for previews, tests or offline mode (main actor). |
+| `flushReporting() async` | Sends pending evaluation stats now. |
+| `close() async` | Stops polling and network calls, sends the last stats. |
 
-The 1.x cache (`UserDefaults` suite `tggl`) is not read by 2.0. The first launch after the update
-starts from defaults until the first response arrives.
+## Resources
 
-## Support
-
-Report issues on [GitHub](https://github.com/Tggl/swift-tggl-client/issues).
+- [Tggl developer documentation](https://tggl.io/developers)
+- [Remote evaluation](https://tggl.io/developers/evaluating-flags/remote-evaluation)
+- [Tggl Proxy](https://tggl.io/developers/evaluating-flags/tggl-proxy)
+- [API reference](https://tggl.io/developers/api-reference)
+- [Report an issue](https://github.com/Tggl/swift-tggl-client/issues)
