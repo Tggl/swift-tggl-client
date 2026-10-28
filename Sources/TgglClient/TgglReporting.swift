@@ -1,190 +1,130 @@
 import Foundation
 
-public actor TgglReporting {
-
-    private struct AggregationKey: Hashable {
-        let valueJSON: String
-        let defaultJSON: String
+/// Aggregates flag evaluations and sends them to `POST /report` in batches.
+///
+/// Wire format (one entry per distinct value/default pair):
+/// ```json
+/// {"clients":[{"id":"swift-client:2.0.0/TgglClient","flags":{"my-flag":[{"value":true,"default":false,"count":3}]}}]}
+/// ```
+/// `value` is omitted when the flag was not active (missing from the evaluation), as required by the API.
+final class TgglReporter: @unchecked Sendable {
+    struct Key: Hashable {
+        let slug: String
+        /// `nil` when the flag was inactive / unknown.
+        let value: TgglValue?
+        /// `nil` when the default could not be represented as JSON.
+        let defaultValue: TgglValue?
     }
 
-    private struct FlagEntry {
-        let value: Any?
-        let defaultValue: Any?
-        var count: Int
+    private struct State {
+        var pending: [Key: Int] = [:]
+        var flushTask: Task<Void, Never>?
+        var interval: TimeInterval
+        var isClosed = false
     }
 
-    // clientId -> slug -> aggregationKey -> FlagEntry
-    private var reportFlags: [String: [String: [AggregationKey: FlagEntry]]] = [:]
+    let clientId: String
+    private let transport: TgglTransport
+    private let state: Locked<State>
 
-    private let apiKey: String?
-    private let baseUrls: [String]
-    private let session: URLSession
-    private var flushIntervalMs: Int
-    private var flushTask: Task<Void, Never>?
-
-    public init(
-        apiKey: String? = nil,
-        baseUrls: [String] = ["https://api.tggl.io"],
-        session: URLSession = .shared,
-        flushIntervalMs: Int = 5_000
-    ) {
-        self.apiKey = apiKey
-        self.session = session
-        self.flushIntervalMs = flushIntervalMs
-
-        var urls = baseUrls
-        if !urls.contains("https://api.tggl.io") {
-            urls.append("https://api.tggl.io")
-        }
-        self.baseUrls = urls
+    init(transport: TgglTransport, clientId: String, interval: TimeInterval) {
+        self.transport = transport
+        self.clientId = clientId
+        self.state = Locked(State(interval: interval))
     }
 
-    public func reportFlag(
-        slug: String,
-        value: TgglValue?,
-        defaultValue: TgglValue?,
-        count: Int = 1,
-        clientId: String = ""
-    ) {
-        let rawValue = value.flatMap { Self.toRawJSON($0) }
-        let rawDefault = defaultValue.flatMap { Self.toRawJSON($0) }
-
-        let valueJSON = Self.jsonString(rawValue) ?? "null"
-        let defaultJSON = Self.jsonString(rawDefault) ?? "null"
-        let key = AggregationKey(valueJSON: valueJSON, defaultJSON: defaultJSON)
-
-        reportFlags[clientId, default: [:]][slug, default: [:]][key, default: FlagEntry(value: rawValue, defaultValue: rawDefault, count: 0)].count += count
-
-        scheduleNextFlush()
+    func record(slug: String, value: TgglValue?, defaultValue: TgglValue?) {
+        state.withLock { state in
+            guard !state.isClosed else { return }
+            state.pending[Key(slug: slug, value: value, defaultValue: defaultValue), default: 0] += 1
+            scheduleFlushIfNeeded(&state)
+        }
     }
 
-    public func flush() async {
-        flushTask?.cancel()
-        flushTask = nil
-
-        guard !reportFlags.isEmpty else {
-            scheduleNextFlush()
-            return
+    /// Sends everything pending now. Evaluations are kept for the next batch if the network fails.
+    func flush() async {
+        let batch: [Key: Int] = state.withLock { state in
+            let batch = state.pending
+            state.pending = [:]
+            return batch
         }
+        guard !batch.isEmpty else { return }
 
-        let flagsToReport = reportFlags
-        reportFlags = [:]
-
-        var clients: [[String: Any]] = []
-        for (clientId, slugs) in flagsToReport {
-            var flagsDict: [String: Any] = [:]
-            for (slug, entries) in slugs {
-                var flagArray: [[String: Any]] = []
-                for (_, entry) in entries {
-                    var item: [String: Any] = ["count": entry.count]
-                    item["value"] = entry.value ?? NSNull()
-                    item["default"] = entry.defaultValue ?? NSNull()
-                    flagArray.append(item)
-                }
-                flagsDict[slug] = flagArray
-            }
-            var clientDict: [String: Any] = ["flags": flagsDict]
-            if !clientId.isEmpty {
-                clientDict["id"] = clientId
-            }
-            clients.append(clientDict)
-        }
-
-        let report: [String: Any] = ["clients": clients]
-
-        guard let postData = try? JSONSerialization.data(withJSONObject: report) else {
-            scheduleNextFlush()
-            return
-        }
-
-        var headers: [String: String] = ["Content-Type": "application/json"]
-        if let apiKey {
-            headers["x-tggl-api-key"] = apiKey
-        }
-
-        for baseUrl in baseUrls {
-            guard let url = URL(string: baseUrl + "/report") else { continue }
-
-            var success = false
-            for attempt in 0..<2 {
-                do {
-                    var request = URLRequest(url: url)
-                    request.httpMethod = "POST"
-                    request.allHTTPHeaderFields = headers
-                    request.httpBody = postData
-                    request.timeoutInterval = 10
-
-                    let (_, response) = try await session.data(for: request)
-                    if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                        success = true
-                        break
-                    }
-                } catch {
-                    if attempt < 1 {
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                    }
+        do {
+            let body = try Self.body(for: batch, clientId: clientId)
+            _ = try await transport.post(path: "report", body: body)
+        } catch let error as TgglError where !error.isRetryable {
+            // Invalid key or rejected payload: retrying would fail the same way.
+        } catch {
+            state.withLock { state in
+                for (key, count) in batch {
+                    state.pending[key, default: 0] += count
                 }
             }
-
-            if success { break }
         }
 
-        scheduleNextFlush()
+        state.withLock { scheduleFlushIfNeeded(&$0) }
     }
 
-    public func start(flushIntervalMs: Int = 5_000) {
-        self.flushIntervalMs = max(0, flushIntervalMs)
-
-        if flushIntervalMs <= 0 {
-            flushTask?.cancel()
-            flushTask = nil
+    /// Stops the timer and sends the last batch.
+    func close() async {
+        state.withLock { state in
+            state.isClosed = true
+            state.flushTask?.cancel()
+            state.flushTask = nil
         }
-
-        scheduleNextFlush()
+        await flush()
     }
 
-    public func stop() {
-        start(flushIntervalMs: 0)
-    }
-
-    public func isActive() -> Bool {
-        flushIntervalMs > 0
-    }
-
-    // MARK: - Private
-
-    private func scheduleNextFlush() {
-        guard flushIntervalMs > 0, flushTask == nil, !reportFlags.isEmpty else { return }
-
-        let interval = flushIntervalMs
-        flushTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000)
-            await self?.flush()
+    private func scheduleFlushIfNeeded(_ state: inout State) {
+        guard !state.isClosed, state.flushTask == nil, state.interval > 0, !state.pending.isEmpty else { return }
+        let nanoseconds = UInt64(state.interval * 1_000_000_000)
+        state.flushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            self.state.withLock { $0.flushTask = nil }
+            await self.flush()
         }
     }
 
-    private static func toRawJSON(_ value: TgglValue) -> Any {
-        switch value {
-        case .string(let s): return s
-        case .number(let n): return n
-        case .boolean(let b): return b
-        case .array(let arr): return arr.map { toRawJSON($0) }
-        case .object(let obj): return obj.mapValues { toRawJSON($0) }
-        case .null: return NSNull()
+    // MARK: - Payload
+
+    private struct Body: Encodable {
+        struct Client: Encodable {
+            let id: String
+            let flags: [String: [Entry]]
         }
+
+        struct Entry: Encodable {
+            let value: TgglValue?
+            let defaultValue: TgglValue?
+            let count: Int
+
+            enum CodingKeys: String, CodingKey {
+                case value
+                case defaultValue = "default"
+                case count
+            }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                // `.some(.null)` encodes as `null`; `nil` (inactive flag) omits the key.
+                try container.encodeIfPresent(value, forKey: .value)
+                try container.encodeIfPresent(defaultValue, forKey: .defaultValue)
+                try container.encode(count, forKey: .count)
+            }
+        }
+
+        let clients: [Client]
     }
 
-    private static func jsonString(_ value: Any?) -> String? {
-        guard let value else { return nil }
-        if value is NSNull { return "null" }
-        if let s = value as? String { return "\"\(s)\"" }
-        if let n = value as? Int { return "\(n)" }
-        if let d = value as? Double { return "\(d)" }
-        if let b = value as? Bool { return b ? "true" : "false" }
-        guard JSONSerialization.isValidJSONObject(value),
-              let data = try? JSONSerialization.data(withJSONObject: value) else {
-            return "\(value)"
+    static func body(for batch: [Key: Int], clientId: String) throws -> Data {
+        var flags: [String: [Body.Entry]] = [:]
+        for (key, count) in batch {
+            flags[key.slug, default: []].append(Body.Entry(value: key.value, defaultValue: key.defaultValue, count: count))
         }
-        return String(data: data, encoding: .utf8)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(Body(clients: [Body.Client(id: clientId, flags: flags)]))
     }
 }

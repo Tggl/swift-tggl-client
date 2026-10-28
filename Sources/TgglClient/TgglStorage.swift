@@ -1,47 +1,79 @@
-//
-//  TgglStorage.swift
-//  TgglClient
-//
-//  Created by Pierre on 15/09/2025.
-//
-
 import Foundation
 
-struct TgglStorage {
-    
-    private let defaults: UserDefaults = UserDefaults(suiteName: "tggl") ?? .standard
-    
-    private let contextKey: String = "context"
-    private let flagsKey: String = "flags"
+/// Persists the last known flags so that the app starts with them on the next launch
+/// (the client is then ready immediately, before the network answers).
+///
+/// The client handles serialization; a storage only stores opaque bytes.
+public protocol TgglStorage: Sendable {
+    func load() -> Data?
+    func save(_ data: Data)
+}
 
-    // context
-    func save(context: [String: Any]) {
-        // Only property-list-compatible values will be stored.
-        defaults.set(context, forKey: contextKey)
+/// Default storage, backed by `UserDefaults`.
+///
+/// Each API key gets its own entry, so two clients (e.g. two projects, or dev and prod)
+/// never share their cache.
+///
+/// - Note: The cached snapshot contains the evaluation context (user id, email…).
+///   Provide your own ``TgglStorage`` (e.g. Keychain or an encrypted file) if your
+///   context holds sensitive data, or disable caching with ``TgglOptions/Cache/disabled``.
+public final class TgglUserDefaultsStorage: TgglStorage, @unchecked Sendable {
+    // UserDefaults is documented as thread-safe.
+    private let defaults: UserDefaults
+    private let key: String
+
+    public init(key: String, defaults: UserDefaults = UserDefaults(suiteName: "io.tggl.client") ?? .standard) {
+        self.key = key
+        self.defaults = defaults
     }
-    
-    func getContext() -> [String: Any] {
-        defaults.dictionary(forKey: contextKey) ?? [:]
+
+    /// Storage dedicated to a given API key.
+    public convenience init(apiKey: String) {
+        self.init(key: "tggl.v2.\(Self.fingerprint(of: apiKey))")
     }
-    
-    // flags
-    func save(flags: [[Tggl]]) {
-        if let data = try? JSONEncoder().encode(flags) {
-            defaults.set(data, forKey: flagsKey)
+
+    public func load() -> Data? {
+        defaults.data(forKey: key)
+    }
+
+    public func save(_ data: Data) {
+        defaults.set(data, forKey: key)
+    }
+
+    public func clear() {
+        defaults.removeObject(forKey: key)
+    }
+
+    /// Stable, non-reversible fingerprint (FNV-1a 64) so the raw API key is not used as a key.
+    static func fingerprint(of string: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in string.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
         }
+        return String(hash, radix: 16)
     }
-    
-    func getFlags() -> [[Tggl]] {
-        if let data = defaults.data(forKey: flagsKey),
-           let decoded = try? JSONDecoder().decode([[Tggl]].self, from: data) {
-            return decoded
-        }
-        return []
+}
+
+/// In-memory storage: useful for tests, previews, or sharing state between clients.
+public final class TgglMemoryStorage: TgglStorage, @unchecked Sendable {
+    private let data: Locked<Data?>
+
+    public init(data: Data? = nil) {
+        self.data = Locked(data)
     }
-    
-    // convenience for tests or full reset
-    func clear() {
-        defaults.removeObject(forKey: contextKey)
-        defaults.removeObject(forKey: flagsKey)
+
+    public func load() -> Data? {
+        data.withLock { $0 }
     }
+
+    public func save(_ data: Data) {
+        self.data.withLock { $0 = data }
+    }
+}
+
+/// What the client persists: the context used for the last successful evaluation and its result.
+struct TgglSnapshot: Codable, Equatable {
+    var context: [String: TgglValue]
+    var flags: [String: TgglValue]
 }

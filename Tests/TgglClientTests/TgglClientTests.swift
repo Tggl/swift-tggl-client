@@ -1,361 +1,440 @@
-import XCTest
 import Combine
+import XCTest
 @testable import TgglClient
 
-// MARK: - Mock URLProtocol
-
-final class MockURLProtocol: URLProtocol {
-    struct Response {
-        let statusCode: Int
-        let headers: [String: String]?
-        let data: Data
-    }
-
-    private static var currentResponse: Response?
-    private static var requestHandler: ((URLRequest) -> Response?)?
-    private static let lock = NSLock()
-    static var recordedRequests: [URLRequest] = []
-
-    static func setResponse(_ response: Response?) {
-        lock.lock()
-        currentResponse = response
-        requestHandler = nil
-        lock.unlock()
-    }
-
-    static func setJSON(_ jsonString: String, statusCode: Int = 200, headers: [String: String] = ["Content-Type": "application/json"]) {
-        let data = Data(jsonString.utf8)
-        setResponse(Response(statusCode: statusCode, headers: headers, data: data))
-    }
-
-    static func setHandler(_ handler: @escaping (URLRequest) -> Response?) {
-        lock.lock()
-        currentResponse = nil
-        requestHandler = handler
-        lock.unlock()
-    }
-
-    static func clear() {
-        lock.lock()
-        currentResponse = nil
-        requestHandler = nil
-        recordedRequests = []
-        lock.unlock()
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let client = client else { return }
-
-        Self.lock.lock()
-        Self.recordedRequests.append(request)
-        let handler = Self.requestHandler
-        let fallback = Self.currentResponse
-        Self.lock.unlock()
-
-        let url = request.url!
-        let resolved = handler?(request) ?? fallback
-
-        if let next = resolved {
-            let httpResponse = HTTPURLResponse(url: url, statusCode: next.statusCode, httpVersion: "HTTP/1.1", headerFields: next.headers)!
-            client.urlProtocol(self, didReceive: httpResponse, cacheStoragePolicy: .notAllowed)
-            client.urlProtocol(self, didLoad: next.data)
-            client.urlProtocolDidFinishLoading(self)
-        } else {
-            let httpResponse = HTTPURLResponse(url: url, statusCode: 500, httpVersion: "HTTP/1.1", headerFields: nil)!
-            client.urlProtocol(self, didReceive: httpResponse, cacheStoragePolicy: .notAllowed)
-            client.urlProtocol(self, didLoad: Data())
-            client.urlProtocolDidFinishLoading(self)
-        }
-    }
-
-    override func stopLoading() {}
-}
-
 final class TgglClientTests: XCTestCase {
-    override func setUp() async throws {
-        let storage = TgglStorage()
-        storage.clear()
-        MockURLProtocol.clear()
+    static let proxy = URL(string: "https://proxy.example.com")!
+
+    static let flagsJSON = """
+    [[
+      {"key": "bool-flag", "type": "boolean", "booleanValue": true},
+      {"key": "string-flag", "type": "string", "stringValue": "blue"},
+      {"key": "int-flag", "type": "number", "numberValue": 42},
+      {"key": "double-flag", "type": "number", "numberValue": 1.5},
+      {"key": "null-flag", "type": "null"},
+      {"key": "json-flag", "type": "json", "jsonValue": {"title": "Hi", "tags": ["a", "b"]}}
+    ]]
+    """
+
+    override func setUp() {
+        super.setUp()
+        MockURLProtocol.reset()
     }
 
-    private func makeMockedSession() -> URLSession {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.urlCache = nil
-        return URLSession(configuration: config)
+    private func makeOptions(
+        baseUrls: [URL] = [TgglClientTests.proxy],
+        fallbackToTgglApi: Bool = false,
+        maxRetries: Int = 0,
+        initialFetch: Bool = true,
+        cache: TgglOptions.Cache = .disabled
+    ) -> TgglOptions {
+        TgglOptions(
+            baseUrls: baseUrls,
+            fallbackToTgglApi: fallbackToTgglApi,
+            maxRetries: maxRetries,
+            timeout: 2,
+            initialFetch: initialFetch,
+            reporting: false,
+            cache: cache,
+            session: MockURLProtocol.session()
+        )
     }
 
-    private func waitForFlagsCount(_ client: TgglClient, expected: Int, timeout: TimeInterval = 2.0, pollInterval: TimeInterval = 0.02, file: StaticString = #file, line: UInt = #line) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            let flags = await client.getFlags()
-            if flags.count == expected {
-                return
-            }
-            try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+    private func makeClient(
+        context: TgglContextInput? = ["userId": "u1"],
+        options: TgglOptions? = nil
+    ) -> TgglClient {
+        TgglClient(apiKey: "test-key", context: context, options: options ?? makeOptions())
+    }
+
+    private func userId(of request: MockURLProtocol.RecordedRequest) -> String? {
+        ((request.jsonBody as? [[String: Any]])?.first)?["userId"] as? String
+    }
+
+    // MARK: - Reading flags
+
+    func testReturnsDefaultsBeforeFirstResponse() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON, delay: 0.3) }
+        let client = makeClient()
+
+        XCTAssertFalse(client.isReady)
+        XCTAssertEqual(client.get("bool-flag", default: false), false)
+
+        await client.refetch()
+
+        XCTAssertTrue(client.isReady)
+        XCTAssertEqual(client.get("bool-flag", default: false), true)
+    }
+
+    func testTypedValues() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+
+        XCTAssertEqual(client.get("bool-flag", default: false), true)
+        XCTAssertEqual(client.get("string-flag", default: "red"), "blue")
+        XCTAssertEqual(client.get("int-flag", default: 0), 42)
+        XCTAssertEqual(client.get("int-flag", default: 0.0), 42.0)
+        XCTAssertEqual(client.get("double-flag", default: 0.0), 1.5)
+        XCTAssertEqual(client.get("json-flag", default: TgglValue.null), ["title": "Hi", "tags": ["a", "b"]])
+        XCTAssertEqual(client.get("json-flag", default: [String: TgglValue]())["title"], "Hi")
+    }
+
+    func testUnknownFlagReturnsDefault() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+
+        XCTAssertEqual(client.get("unknown-flag", default: true), true)
+        XCTAssertEqual(client.get("unknown-flag", default: "fallback"), "fallback")
+    }
+
+    func testTypeMismatchReturnsDefault() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+
+        XCTAssertEqual(client.get("string-flag", default: false), false)
+        XCTAssertEqual(client.get("bool-flag", default: "x"), "x")
+        // 1.5 is not an Int.
+        XCTAssertEqual(client.get("double-flag", default: 7), 7)
+    }
+
+    func testNullFlagIsActiveWithoutValue() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+
+        XCTAssertEqual(client.get("null-flag", default: "x"), "x")
+        XCTAssertEqual(client.get("null-flag", default: TgglValue.string("x")), .null)
+        XCTAssertNil(client.get("null-flag", default: Optional("x")))
+        XCTAssertEqual(client.get("unknown-flag", default: Optional("x")), "x")
+    }
+
+    func testDecodeJsonFlag() async {
+        struct Banner: Codable, Equatable {
+            let title: String
+            let tags: [String]
         }
-        let finalFlags = await client.getFlags()
-        XCTFail("Timed out waiting for flags.count == \(expected). Final count: \(finalFlags.count)", file: file, line: line)
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+
+        let fallback = Banner(title: "", tags: [])
+        XCTAssertEqual(client.decode("json-flag", as: Banner.self, default: fallback), Banner(title: "Hi", tags: ["a", "b"]))
+        XCTAssertEqual(client.decode("string-flag", as: Banner.self, default: fallback), fallback)
+        XCTAssertEqual(client.decode("unknown", as: Banner.self, default: fallback), fallback)
     }
 
-    // MARK: - Original test
+    func testFlagThatBecomesInactiveFallsBackToDefault() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+        XCTAssertEqual(client.get("bool-flag", default: false), true)
 
-    func testFlagsAreUpdatedWhenContextChanges() async throws {
-        let session = makeMockedSession()
+        // Inactive flags are not listed by /typed-flags.
+        MockURLProtocol.setHandler { _ in .json("[[]]") }
+        await client.refetch()
 
-        let initialJSON = """
-        [[{"key":"bgColor","type":"string","stringValue":"#ff0000"}]]
-        """
-        let afterFirstContextJSON = """
-        [[{"key":"bgColor","type":"string","stringValue":"#ff0000"},{"key":"eric","type":"string","stringValue":"flag"}]]
-        """
-        let afterSecondContextJSON = """
-        [[{"key":"bgColor","type":"string","stringValue":"#ff0000"}]]
-        """
-
-        let client = TgglClient(apiKey: "test_api_key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        MockURLProtocol.setJSON(initialJSON)
-        await client.startPolling(every: 3)
-
-        await waitForFlagsCount(client, expected: 1, timeout: 1.0)
-        let flagsAfterStart = await client.getFlags()
-        XCTAssertEqual(flagsAfterStart.count, 1)
-
-        MockURLProtocol.setJSON(afterFirstContextJSON)
-        await client.setContext(context: ["email": "pierre.kopaczewski@scenies.com"])
-        await waitForFlagsCount(client, expected: 2, timeout: 1.0)
-        let flagsAfterFirstContext = await client.getFlags()
-        XCTAssertEqual(flagsAfterFirstContext.count, 2)
-
-        MockURLProtocol.setJSON(afterSecondContextJSON)
-        await client.setContext(context: ["email": "zlobodan.debernardi@sadoma.so"])
-        await waitForFlagsCount(client, expected: 1, timeout: 1.0)
-        let flagsAfterSecondContext = await client.getFlags()
-        XCTAssertEqual(flagsAfterSecondContext.count, 1)
-
-        await client.stopPolling()
+        XCTAssertEqual(client.get("bool-flag", default: false), false)
+        XCTAssertTrue(client.flags.isEmpty)
     }
 
-    // MARK: - Ready state tests
+    // MARK: - Request & context
 
-    func testIsReadyAfterSuccessfulFetch() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("[[]]")
+    func testRequestFormat() async throws {
+        let client = makeClient(context: ["userId": "u1", "age": 30, "beta": true, "email": nil])
+        await client.refetch()
 
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
+        let request = try XCTUnwrap(MockURLProtocol.requests.first)
+        XCTAssertEqual(request.url.absoluteString, "https://proxy.example.com/typed-flags")
+        let apiKey = request.headers.first { $0.key.lowercased() == "x-tggl-api-key" }?.value
+        XCTAssertEqual(apiKey, "test-key")
 
-        let readyBefore = await client.getIsReady()
-        XCTAssertFalse(readyBefore)
-
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        let readyAfter = await client.getIsReady()
-        XCTAssertTrue(readyAfter)
+        let body = try XCTUnwrap(request.jsonBody as? [[String: Any]])
+        XCTAssertEqual(body.count, 1, "/typed-flags expects an array of contexts")
+        XCTAssertEqual(body[0]["userId"] as? String, "u1")
+        XCTAssertEqual(body[0]["age"] as? Double, 30)
+        XCTAssertEqual(body[0]["beta"] as? Bool, true)
+        XCTAssertTrue(body[0]["email"] is NSNull)
     }
 
-    func testWaitReadyResolvesAfterFetch() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("[[]]")
+    func testSetContextReplacesAndUpdateContextMerges() async {
+        let client = makeClient(context: nil)
 
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
+        await client.setContext(["userId": "u1", "plan": "free"])
+        XCTAssertEqual(client.context, ["userId": "u1", "plan": "free"])
 
-        await client.setContext(context: [:])
+        await client.updateContext(["plan": "premium", "country": "FR"])
+        XCTAssertEqual(client.context, ["userId": "u1", "plan": "premium", "country": "FR"])
+
+        await client.setContext(["userId": "u2"])
+        XCTAssertEqual(client.context, ["userId": "u2"])
+        XCTAssertEqual(MockURLProtocol.requests.last.flatMap(userId(of:)), "u2")
+    }
+
+    func testOnlyLatestContextIsApplied() async throws {
+        MockURLProtocol.setHandler { request in
+            let isSlow = ((request.jsonBody as? [[String: Any]])?.first?["userId"] as? String) == "slow"
+            let variant = isSlow ? "slow" : "fast"
+            return .json(#"[[{"key":"variant","type":"string","stringValue":"\#(variant)"}]]"#, delay: isSlow ? 0.5 : 0)
+        }
+        let client = makeClient(context: nil, options: makeOptions(initialFetch: false))
+
+        let slow = Task { await client.setContext(["userId": "slow"]) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await client.setContext(["userId": "fast"])
+        await slow.value
+        try await Task.sleep(nanoseconds: 700_000_000)
+
+        XCTAssertEqual(client.get("variant", default: ""), "fast")
+        XCTAssertEqual(client.context, ["userId": "fast"])
+    }
+
+    // MARK: - Network errors
+
+    func testUnauthorizedIsNotRetried() async {
+        MockURLProtocol.setHandler { _ in .status(401) }
+        let client = makeClient(options: makeOptions(maxRetries: 3))
+        await client.refetch()
+
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+        XCTAssertEqual(client.lastError, .invalidApiKey)
+        XCTAssertTrue(client.isReady, "the client is ready even when the first request fails")
+    }
+
+    func testServerErrorsAreRetriedPerUrl() async {
+        MockURLProtocol.setHandler { _ in .status(500) }
+        let client = makeClient(options: makeOptions(maxRetries: 2))
+        await client.refetch()
+
+        XCTAssertEqual(MockURLProtocol.requests.count, 3)
+        XCTAssertEqual(client.lastError, .httpStatus(500))
+    }
+
+    func testFallsBackToTgglApi() async {
+        MockURLProtocol.setHandler { request in
+            request.url.host == "proxy.example.com" ? .status(503) : .json(Self.flagsJSON)
+        }
+        let client = makeClient(options: makeOptions(fallbackToTgglApi: true))
+        await client.refetch()
+
+        XCTAssertEqual(MockURLProtocol.requests.map(\.url.host), ["proxy.example.com", "api.tggl.io"])
+        XCTAssertEqual(client.get("bool-flag", default: false), true)
+        XCTAssertNil(client.lastError)
+    }
+
+    func testKeepsLastFlagsOnErrorAndClearsErrorOnSuccess() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let client = makeClient()
+        await client.refetch()
+
+        MockURLProtocol.setHandler { _ in .status(500) }
+        await client.refetch()
+        XCTAssertEqual(client.get("bool-flag", default: false), true)
+        XCTAssertEqual(client.lastError, .httpStatus(500))
+
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        await client.refetch()
+        XCTAssertNil(client.lastError)
+    }
+
+    func testInvalidResponseIsReported() async {
+        MockURLProtocol.setHandler { _ in .json("not json") }
+        let client = makeClient()
+        await client.refetch()
+
+        guard case .invalidResponse = client.lastError else {
+            return XCTFail("expected invalidResponse, got \(String(describing: client.lastError))")
+        }
+    }
+
+    // MARK: - Readiness
+
+    func testWaitReady() async {
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON, delay: 0.2) }
+        let client = makeClient()
 
         await client.waitReady()
-        let ready = await client.getIsReady()
-        XCTAssertTrue(ready)
+
+        XCTAssertTrue(client.isReady)
+        XCTAssertEqual(client.get("bool-flag", default: false), true)
     }
 
-    func testIsReadyAfterErrorStillBecomesTrue() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setResponse(MockURLProtocol.Response(statusCode: 500, headers: nil, data: Data()))
-
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        await client.setContext(context: [:])
+    func testInitialFetchDisabledDoesNotCallTheApi() async throws {
+        let client = makeClient(options: makeOptions(initialFetch: false))
         try await Task.sleep(nanoseconds: 200_000_000)
 
-        let ready = await client.getIsReady()
-        XCTAssertTrue(ready, "isReady should be true even after a failed fetch (first attempt completed)")
+        XCTAssertTrue(MockURLProtocol.requests.isEmpty)
+        XCTAssertFalse(client.isReady)
     }
 
-    // MARK: - Error exposure tests
+    // MARK: - Cache
 
-    func testGetErrorReturnsNilOnSuccess() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("[[]]")
+    func testCachedFlagsMakeTheClientReadyImmediately() async {
+        let storage = TgglMemoryStorage()
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let first = makeClient(options: makeOptions(cache: .custom(storage)))
+        await first.refetch()
+        await first.close()
 
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
+        let second = makeClient(context: nil, options: makeOptions(initialFetch: false, cache: .custom(storage)))
 
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        let error = await client.getError()
-        XCTAssertNil(error)
+        XCTAssertTrue(second.isReady)
+        XCTAssertEqual(second.get("bool-flag", default: false), true)
+        XCTAssertEqual(second.context, ["userId": "u1"])
     }
 
-    func testGetErrorReturnsErrorOnFailure() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setResponse(MockURLProtocol.Response(statusCode: 500, headers: nil, data: Data()))
+    func testCachedFlagsAreNotReusedForAnotherContext() async {
+        let storage = TgglMemoryStorage()
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        let first = makeClient(context: ["userId": "u1"], options: makeOptions(cache: .custom(storage)))
+        await first.refetch()
 
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
+        let sameUser = makeClient(context: ["userId": "u1"], options: makeOptions(initialFetch: false, cache: .custom(storage)))
+        XCTAssertTrue(sameUser.isReady)
+        XCTAssertEqual(sameUser.get("bool-flag", default: false), true)
 
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        let error = await client.getError()
-        XCTAssertNotNil(error)
+        let otherUser = makeClient(context: ["userId": "u2"], options: makeOptions(initialFetch: false, cache: .custom(storage)))
+        XCTAssertEqual(otherUser.context, ["userId": "u2"])
+        XCTAssertFalse(otherUser.isReady)
+        XCTAssertEqual(otherUser.get("bool-flag", default: false), false)
     }
 
-    func testErrorClearedOnSubsequentSuccess() async throws {
-        let session = makeMockedSession()
-
-        MockURLProtocol.setResponse(MockURLProtocol.Response(statusCode: 500, headers: nil, data: Data()))
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-        let errorBefore = await client.getError()
-        XCTAssertNotNil(errorBefore)
-
-        MockURLProtocol.setJSON("[[]]")
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-        let errorAfter = await client.getError()
-        XCTAssertNil(errorAfter)
-    }
-
-    // MARK: - Refetch and close tests
-
-    func testRefetchReloadsFlags() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("[[]]")
-
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-        await waitForFlagsCount(client, expected: 0, timeout: 1.0)
-
-        MockURLProtocol.setJSON("""
-        [[{"key":"flag1","type":"boolean","booleanValue":true}]]
-        """)
+    func testUnauthorizedDoesNotFallBackToOtherUrls() async {
+        MockURLProtocol.setHandler { _ in .status(401) }
+        let client = makeClient(options: makeOptions(fallbackToTgglApi: true, maxRetries: 2))
         await client.refetch()
-        await waitForFlagsCount(client, expected: 1, timeout: 1.0)
 
-        let flags = await client.getFlags()
-        XCTAssertEqual(flags.count, 1)
-        XCTAssertEqual(flags.first?.key, "flag1")
+        XCTAssertEqual(MockURLProtocol.requests.map(\.url.host), ["proxy.example.com"])
+        XCTAssertEqual(client.lastError, .invalidApiKey)
     }
 
-    func testCloseStopsPolling() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("[[]]")
-
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        await client.startPolling(every: 100)
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        await client.close()
-
-        let polling = await client.polling
-        if case .disabled = polling {
-            // expected
-        } else {
-            XCTFail("Polling should be disabled after close()")
-        }
-    }
-
-    // MARK: - Failover tests
-
-    func testFailoverToSecondURL() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.clear()
-
-        MockURLProtocol.setHandler { request in
-            let url = request.url!.absoluteString
-            if url.contains("bad-server.example.com") {
-                return MockURLProtocol.Response(statusCode: 500, headers: nil, data: Data())
-            } else if url.contains("api.tggl.io") {
-                return MockURLProtocol.Response(
-                    statusCode: 200,
-                    headers: ["Content-Type": "application/json"],
-                    data: Data("[[]]".utf8)
-                )
-            }
-            return nil
-        }
-
-        let client = TgglClient(
-            apiKey: "key",
-            baseUrls: ["https://bad-server.example.com", "https://api.tggl.io"],
-            session: session,
-            maxRetries: 0,
-            reporting: false,
-            initialFetch: false
+    func testUserDefaultsCacheIsScopedPerApiKey() {
+        XCTAssertNotEqual(
+            TgglUserDefaultsStorage.fingerprint(of: "key-a"),
+            TgglUserDefaultsStorage.fingerprint(of: "key-b")
         )
+        XCTAssertEqual(
+            TgglUserDefaultsStorage.fingerprint(of: "key-a"),
+            TgglUserDefaultsStorage.fingerprint(of: "key-a")
+        )
+    }
 
-        await client.setContext(context: [:])
+    // MARK: - Publishers
+
+    func testPublisherEmitsDefaultWhenFlagBecomesInactive() async {
+        let client = makeClient(options: makeOptions(initialFetch: false))
+        let values = Locked<[Bool]>([])
+        let cancellable = client.publisher(for: "bool-flag", default: false)
+            .sink { value in values.withLock { $0.append(value) } }
+
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        await client.refetch()
+        MockURLProtocol.setHandler { _ in .json("[[]]") }
+        await client.refetch()
+
+        XCTAssertEqual(values.withLock { $0 }, [false, true, false])
+        cancellable.cancel()
+    }
+
+    func testPublisherSkipsUnrelatedChanges() async {
+        let client = makeClient(options: makeOptions(initialFetch: false))
+        let values = Locked<[String]>([])
+        let cancellable = client.publisher(for: "string-flag", default: "none")
+            .sink { value in values.withLock { $0.append(value) } }
+
+        MockURLProtocol.setHandler { _ in .json(Self.flagsJSON) }
+        await client.refetch()
+        MockURLProtocol.setHandler { _ in
+            .json(#"[[{"key":"string-flag","type":"string","stringValue":"blue"},{"key":"other","type":"boolean","booleanValue":true}]]"#)
+        }
+        await client.refetch()
+
+        XCTAssertEqual(values.withLock { $0 }, ["none", "blue"])
+        cancellable.cancel()
+    }
+
+    func testErrorPublisher() async {
+        let client = makeClient(options: makeOptions(initialFetch: false))
+        let errors = Locked<[TgglError]>([])
+        let cancellable = client.errorPublisher.sink { error in errors.withLock { $0.append(error) } }
+
+        MockURLProtocol.setHandler { _ in .status(401) }
+        await client.refetch()
+
+        XCTAssertEqual(errors.withLock { $0 }, [.invalidApiKey])
+        cancellable.cancel()
+    }
+
+    // MARK: - Polling
+
+    func testPollingRefetchesAndStops() async throws {
+        let client = makeClient()
+        await client.refetch()
+        let initialCount = MockURLProtocol.requests.count
+
+        client.startPolling(every: 0.2)
+        client.startPolling(every: 0.2) // must not start a second loop
+        try await Task.sleep(nanoseconds: 700_000_000)
+
+        let pollCount = MockURLProtocol.requests.count - initialCount
+        XCTAssertGreaterThanOrEqual(pollCount, 2)
+        XCTAssertLessThanOrEqual(pollCount, 4)
+
+        client.stopPolling()
+        let countAfterStop = MockURLProtocol.requests.count
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(MockURLProtocol.requests.count, countAfterStop)
+    }
+
+    // MARK: - Local overrides & close
+
+    @MainActor
+    func testSetFlagsLocally() {
+        let client = makeClient(options: makeOptions(initialFetch: false))
+        client.setFlags(["my-feature": true, "color": "red"])
+
+        XCTAssertTrue(client.isReady)
+        XCTAssertEqual(client.get("my-feature", default: false), true)
+        XCTAssertEqual(client.get("color", default: ""), "red")
+    }
+
+    func testCloseStopsEverything() async throws {
+        let client = makeClient()
+        await client.refetch()
+        client.startPolling(every: 0.1)
+        await client.close()
+        let count = MockURLProtocol.requests.count
+
+        await client.setContext(["userId": "u2"])
+        await client.refetch()
         try await Task.sleep(nanoseconds: 300_000_000)
 
-        let error = await client.getError()
-        XCTAssertNil(error, "Should succeed via failover to second URL")
-
-        let ready = await client.getIsReady()
-        XCTAssertTrue(ready)
+        XCTAssertEqual(MockURLProtocol.requests.count, count)
+        XCTAssertFalse(client.isPolling)
     }
 
-    // MARK: - Get with default value
+    // MARK: - Options
 
-    func testGetReturnsDefaultWhenFlagMissing() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("[[]]")
+    func testBaseUrlsAreNormalizedAndTgglApiIsAppended() {
+        let options = TgglOptions(baseUrls: [
+            URL(string: "https://proxy.example.com/")!,
+            URL(string: "https://proxy.example.com")!,
+        ])
+        XCTAssertEqual(options.resolvedBaseUrls.map(\.absoluteString), ["https://proxy.example.com", "https://api.tggl.io"])
 
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
+        let proxyOnly = TgglOptions(baseUrls: [URL(string: "https://proxy.example.com")!], fallbackToTgglApi: false)
+        XCTAssertEqual(proxyOnly.resolvedBaseUrls.map(\.absoluteString), ["https://proxy.example.com"])
 
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        let result = await client.get(slug: "missing", defaultValue: .string("default"))
-        XCTAssertEqual(result, .string("default"))
+        XCTAssertEqual(TgglOptions().resolvedBaseUrls.map(\.absoluteString), ["https://api.tggl.io"])
     }
 
-    func testGetReturnsActualFlagWhenPresent() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("""
-        [[{"key":"myFlag","type":"boolean","booleanValue":true}]]
-        """)
-
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        await client.setContext(context: [:])
-        try await Task.sleep(nanoseconds: 200_000_000)
-
-        let result = await client.get(slug: "myFlag", defaultValue: .boolean(false))
-        XCTAssertEqual(result, .boolean(true))
-    }
-
-    // MARK: - Init options
-
-    func testInitialFetchFalseDoesNotFetch() async throws {
-        let session = makeMockedSession()
-        MockURLProtocol.setJSON("""
-        [[{"key":"flag","type":"string","stringValue":"val"}]]
-        """)
-
-        let client = TgglClient(apiKey: "key", session: session, maxRetries: 0, reporting: false, initialFetch: false)
-
-        try await Task.sleep(nanoseconds: 300_000_000)
-
-        let flags = await client.getFlags()
-        XCTAssertEqual(flags.count, 0, "With initialFetch: false and no explicit setContext/startPolling, no fetch should occur")
+    func testBackoff() {
+        XCTAssertEqual(TgglTransport.backoffNanoseconds(attempt: 0), 100_000_000)
+        XCTAssertEqual(TgglTransport.backoffNanoseconds(attempt: 1), 200_000_000)
+        XCTAssertEqual(TgglTransport.backoffNanoseconds(attempt: 2), 400_000_000)
+        XCTAssertEqual(TgglTransport.backoffNanoseconds(attempt: 3), 500_000_000)
+        XCTAssertEqual(TgglTransport.backoffNanoseconds(attempt: 50), 500_000_000)
     }
 }
