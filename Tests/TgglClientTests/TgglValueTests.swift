@@ -81,7 +81,7 @@ final class TgglValueTests: XCTestCase {
         XCTAssertEqual([String: Int](tgglValue: ["a": 1]), ["a": 1])
         XCTAssertEqual(Optional<String>(tgglValue: .null), .some(nil))
         XCTAssertEqual(Optional<String>(tgglValue: "x"), .some("x"))
-        XCTAssertNil(Optional<String>(tgglValue: 1))
+        XCTAssertTrue(Optional<String>(tgglValue: 1) == nil, "a number is not a String?")
     }
 
     func testContextInputConversion() {

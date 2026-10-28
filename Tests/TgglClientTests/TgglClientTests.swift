@@ -107,7 +107,8 @@ final class TgglClientTests: XCTestCase {
 
         XCTAssertEqual(client.get("null-flag", default: "x"), "x")
         XCTAssertEqual(client.get("null-flag", default: TgglValue.string("x")), .null)
-        XCTAssertNil(client.get("null-flag", default: Optional("x")))
+        let nullValue: String? = client.get("null-flag", default: Optional("x"))
+        XCTAssertNil(nullValue)
         XCTAssertEqual(client.get("unknown-flag", default: Optional("x")), "x")
     }
 
